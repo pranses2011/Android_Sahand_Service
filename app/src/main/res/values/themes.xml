@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Sahand" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="colorPrimary">@color/brand</item>
+        <item name="colorPrimaryVariant">@color/brandDark</item>
+        <item name="colorPrimaryDark">@color/brandDark</item>
+        <item name="colorSecondary">@color/brand</item>
+        <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="android:statusBarColor">@color/bgDark</item>
+        <item name="android:navigationBarColor">@color/bgDark</item>
+        <item name="android:windowBackground">@color/bgDark</item>
+        <item name="fontFamily">@font/vazirmatn_regular</item>
+        <item name="android:textViewStyle">@style/Widget.Sahand.TextView</item>
+    </style>
+
+    <!-- Splash: پس‌زمینه سرمه‌ای + لوگو در مرکز -->
+    <style name="Theme.Sahand.Splash" parent="Theme.Sahand">
+        <item name="android:windowBackground">@drawable/splash</item>
+    </style>
+
+    <style name="Widget.Sahand.TextView" parent="android:Widget.Material.TextView">
+        <item name="android:fontFamily">@font/vazirmatn_regular</item>
+    </style>
+</resources>

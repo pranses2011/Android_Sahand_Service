@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- نمایندگی: آبی آسمانی -->
+    <color name="brand">#0EA5E9</color>
+    <color name="brandDark">#0369A1</color>
+</resources>

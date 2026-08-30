@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- عمومی -->
+    <string name="app_role" translatable="false">سامانه خدمات پس از فروش</string>
+    <string name="choose_file">انتخاب فایل</string>
+    <string name="download_started">دانلود شروع شد — در پوشه Downloads ذخیره می‌شود</string>
+    <string name="download_failed">خطا در دانلود</string>
+    <string name="saved_to_downloads">ذخیره شد: %1$s\n(پوشه Downloads)</string>
+    <string name="save_failed">ذخیره فایل ناموفق بود</string>
+    <string name="storage_denied">برای ذخیره فایل، اجازه دسترسی به حافظه لازم است</string>
+    <string name="exit_hint">برای خروج دوباره دکمه بازگشت را بزنید</string>
+    <string name="ssl_blocked">اتصال امن (SSL) سرور معتبر نیست و مسدود شد</string>
+    <string name="no_app">برنامه‌ای برای بازکردن این لینک پیدا نشد</string>
+    <string name="cancel">انصراف</string>
+    <string name="exit">خروج</string>
+    <string name="app_exit_title">خروج از برنامه</string>
+    <string name="app_exit_msg">از برنامه سهند سرویس خارج می‌شوید؟</string>
+    <string name="settings_server">تنظیمات سرور</string>
+
+    <!-- صفحه راه‌اندازی -->
+    <string name="setup_title">اتصال به پنل سهند سرویس</string>
+    <string name="setup_hint">آدرس پنل خود را وارد کنید؛ همان آدرسی که در مرورگر باز می‌کنید (مثال: panel.yourdomain.com)\nاگر هنوز پنل را روی هاست نصب نکرده‌اید، ابتدا بسته cPanel را نصب کنید.</string>
+    <string name="url_hint">آدرس پنل</string>
+    <string name="connect_btn">بررسی و اتصال</string>
+    <string name="checking_btn">در حال بررسی…</string>
+    <string name="url_required">آدرس پنل را وارد کنید</string>
+    <string name="checking">در حال اتصال به سرور… لطفاً صبر کنید</string>
+    <string name="connected_ok">اتصال برقرار شد ✓ در حال ورود…</string>
+    <string name="not_sahand">به این آدرس وصل شد اما پنل سهند سرویس پیدا نشد. آدرس را بررسی کنید (نمونه: https://panel.example.com)</string>
+    <string name="unreachable">اتصال برقرار نشد. آدرس را چک کنید، اینترنت و روشن بودن سرور را مطمئن شوید.</string>
+    <string name="current_server">سرور فعلی: %1$s</string>
+    <string name="cleared">تنظیمات پاک شد. آدرس جدید را وارد کنید.</string>
+    <string name="clear_server">حذف سرور فعلی</string>
+    <string name="panel_version_fmt">نسخه پنل: %1$s — %2$s</string>
+    <string name="panel_version_short">نسخه پنل: %1$s</string>
+    <string name="setup_footer">سهند سرویس — نسخه اندروید v2.4.5\nبا هر بروزرسانی پنل، اپلیکیشن خودکار بروز می‌شود</string>
+
+    <!-- صفحه خطا -->
+    <string name="error_title">ارتباط با سرور برقرار نشد</string>
+</resources>
