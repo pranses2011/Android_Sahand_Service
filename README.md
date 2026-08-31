@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)]()
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7f52ff?style=flat-square&logo=kotlin&logoColor=white)]()
-[![Version](https://img.shields.io/badge/نسخه-2.4.5-0ea5a6?style=flat-square)]()
+[![Version](https://img.shields.io/badge/نسخه-2.6.1-0ea5a6?style=flat-square)]()
 [![Apps](https://img.shields.io/badge/اپلیکیشن-2%20اپ-blue?style=flat-square)]()
 [![License](https://img.shields.io/badge/license-Proprietary-red?style=flat-square)]()
 
@@ -18,8 +18,8 @@
 
 | اپ | فایل | مخصوص |
 |---|---|---|
-| 🏢 **سهند سرویس \| نمایندگی** | `SahandService-Agency-v2.4.5.apk` | مدیر و کارمندان دفتر نمایندگی |
-| 👨‍🔧 **سهند سرویس \| سرویس‌کار** | `SahandService-Technician-v2.4.5.apk` | تکنسین‌های حاضر در میدان |
+| 🏢 **سهند سرویس \| نمایندگی** | `SahandService-Agency-v2.6.1.apk` | مدیر و کارمندان دفتر نمایندگی |
+| 👨‍🔧 **سهند سرویس \| سرویس‌کار** | `SahandService-Technician-v2.6.1.apk` | تکنسین‌های حاضر در میدان |
 
 </div>
 
@@ -245,8 +245,8 @@
 ./gradlew assembleAgencyRelease
 
 # خروجی‌ها:
-# app/build/outputs/apk/agency/release/SahandService-Agency-v2.4.5.apk
-# app/build/outputs/apk/tech/release/SahandService-Technician-v2.4.5.apk
+# app/build/outputs/apk/agency/release/SahandService-Agency-v2.6.1.apk
+# app/build/outputs/apk/tech/release/SahandService-Technician-v2.6.1.apk
 ```
 
 **نیازمندی‌ها:** JDK 17+، Android SDK 34 (خیلی از اینترنت دانلود می‌شود — نیازی به نصب جداگانه نیست)
@@ -333,13 +333,36 @@ git push origin v2.4.6
 
 ---
 
+## 🔐 امنیت شبکه و همگام‌سازی با پنل (B-07)
+
+این اپ یک پوسته (WebView Shell) حول پنل وب است؛ بنابراین **همه قابلیت‌های جدید پنل — چندزبانه ۷ زبانه، مناسبت‌های تقویم، فیلتر تعویض سرویس‌کار، رفع باگ سرویس مشارکتی و فاز صفر امنیتی — بدون به‌روزرسانی APK از طریق همین اپ در دسترس‌اند** (اپ همان پنل زنده را بارگذاری می‌کند).
+
+### تغییرات امنیتی v2.6.1 (همگام با سند تحلیل جامع — بخش B-07)
+
+| مورد | توضیح |
+|---|---|
+| منع محتوای مخلوط | `MIXED_CONTENT_NEVER_LOAD` — روی سرور https هیچ منبع http بارگذاری نمی‌شود (پیش‌تر COMPATIBILITY بود) |
+| هشدار http | ورود آدرس `http://` یک بار هشدار رمزنگاری‌نشده می‌دهد؛ عبور دوم برای سرورهای LAN مجاز است |
+| User-Agent هم‌نسخه | `SahandAndroidApp/2.6.1` — قابل شناسایی در لاگ‌های سرور |
+| سازگاری با A-02 | کوکی نشست امضاشده از طریق CookieManager استاندارد کار می‌کند — تنها اثر فاز امنیتی: **یک بار لاگین مجدد** |
+| health check | `GET /api` و `/version.json` عمومی می‌مانند — صفحه راه‌اندازی بدون تغییر کار می‌کند |
+
+### نقشه راه امنیت (فاز بعدی — نیاز به توسعه نیتیو)
+
+- **Certificate Pinning**: پیاده‌سازی واقعی در WebView نیازمند `shouldInterceptRequest` + اعتبارسنجی دستی گواهی است (حجم کار: متوسط).
+- **کلید امضای release**: فایل `keystore/sahand-release.jks` و رمزش **در ریپوی عمومی** است! ⚠️ توصیه: جابه‌جایی به GitHub Secrets و چرخش کلید (با هشدار: کلید جدید یعنی کاربران باید APK را دستی نصب کنند — به‌روزرسانی خودکار قطع می‌شود).
+- TLS-only پیش‌فرض پس از مهاجرت همه استقرارهای LAN به https.
+
+---
+
 ## 🆕 تاریخچه نسخه‌ها
 
 | نسخه | تاریخ | تغییرات |
 |---|---|---|
+| **2.6.1** | ۱۴۰۵/۰۶/۱۰ | 🔒 همگام با فاز صفر امنیتی پنل (بخش A سند تحلیل): منع محتوای مخلوط (MIXED_CONTENT_NEVER_LOAD)، هشدار اتصال http رمزنگاری‌نشده، User-Agent هم‌نسخه، هم‌راستایی کامل با پنل v2.6.1 |
 | **2.4.5** | ۱۴۰۵/۰۶/۰۹ | 🎉 نخستین انتشار — دو اپ نیتیو (نمایندگی + سرویس‌کار)، راه‌اندازی اتصال به سرور، هوک دانلود blob/data، GPS سرویس‌کار، صفحه خطای آفلاین، فونت وزیرمتن، CI خودکار |
 
-> شماره نسخه اپلیکیشن با شماره نسخه پنل همگام است (2.4.5) تا برابری امکانات مشخص باشد.
+> شماره نسخه اپلیکیشن با شماره نسخه پنل همگام است (2.6.1) تا برابری امکانات مشخص باشد.
 
 ---
 

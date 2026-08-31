@@ -32,6 +32,9 @@ class SetupActivity : AppCompatActivity() {
     private lateinit var currentServerText: TextView
     private lateinit var panelInfoText: TextView
 
+    // B-07: پرچم هشدار http — فقط بار اول متوقف می‌شود، تلاش دوم عبور می‌کند (سرور LAN)
+    private var insecureWarned = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_setup)
@@ -83,6 +86,16 @@ class SetupActivity : AppCompatActivity() {
         inputLayout.error = null
 
         val url = normalize(raw)
+
+        // B-07: هشدار اتصال رمزنگاری‌نشده — مسدود نمی‌کنیم (سرورهای LAN) اما کاربر باید بداند
+        if (url.startsWith("http://") && !insecureWarned) {
+            insecureWarned = true
+            setStatus(R.string.insecure_warning, false)
+            inputLayout.error = getString(R.string.insecure_warning)
+            return // یک بار توقف برای هشدار؛ دوباره زدن دکمه ادامه می‌دهد
+        }
+        inputLayout.error = null
+
         setStatus(R.string.checking, true)
 
         lifecycleScope.launch {
@@ -128,7 +141,7 @@ class SetupActivity : AppCompatActivity() {
             conn.connectTimeout = timeoutMs
             conn.readTimeout = timeoutMs
             conn.instanceFollowRedirects = true
-            conn.setRequestProperty("User-Agent", "SahandAndroidApp/2.4.5")
+            conn.setRequestProperty("User-Agent", "SahandAndroidApp/2.6.1")
             try {
                 if (conn.responseCode !in 200..299) return null
                 val bytes = conn.inputStream.use { s ->

@@ -141,8 +141,10 @@ class MainActivity : AppCompatActivity() {
             loadWithOverviewMode = true
             useWideViewPort = true
             mediaPlaybackRequiresUserGesture = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            userAgentString = "$userAgentString SahandAndroidApp/2.4.5"
+            // B-07: منع بارگذاری محتوای مخلوط — روی سرور https هیچ منبع http بارگذاری نمی‌شود
+            // (پس از خود-میزبانی فونت‌ها در وب v2.6.1 هیچ وابستگی خارجی http باقی نمانده است)
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_LOAD
+            userAgentString = "$userAgentString SahandAndroidApp/2.6.1"
         }
 
         CookieManager.getInstance().apply {

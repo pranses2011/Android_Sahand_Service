@@ -26,6 +26,8 @@
     <string name="url_required">آدرس پنل را وارد کنید</string>
     <string name="checking">در حال اتصال به سرور… لطفاً صبر کنید</string>
     <string name="connected_ok">اتصال برقرار شد ✓ در حال ورود…</string>
+    <!-- B-07: هشدار اتصال رمزنگاری‌نشده -->
+    <string name="insecure_warning">⚠️ این آدرس بدون رمزنگاری (http) است — داده‌ها (از جمله رمز ورود) در مسیر قابل رهگیری است. اگر سرور شما https دارد از آن استفاده کنید.</string>
     <string name="not_sahand">به این آدرس وصل شد اما پنل سهند سرویس پیدا نشد. آدرس را بررسی کنید (نمونه: https://panel.example.com)</string>
     <string name="unreachable">اتصال برقرار نشد. آدرس را چک کنید، اینترنت و روشن بودن سرور را مطمئن شوید.</string>
     <string name="current_server">سرور فعلی: %1$s</string>
