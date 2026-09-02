@@ -130,6 +130,39 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    // ── v2.8.7 — تحویل تضمینی آپدیت‌های سرور به اپ ──
+    // WebView کش HTTP خودش را نگه می‌دارد؛ اگر سرور بروزرسانی شده باشد
+    // (version.json عوض شده) کش HTTP WebView خالی می‌شود تا فایل‌های استاتیک
+    // جدید (چانک‌ها/پچ‌ها) حتماً از سرور بیایند. Service Worker کش صفحه خودش
+    // را با deployRefresh مرورگر (smart-poll.js v2.8.6) تازه می‌کند.
+    private fun ensureFreshContent() {
+        try {
+            val verUrl = serverUrl.trimEnd('/') + "/version.json"
+            Thread {
+                try {
+                    val conn = URL(verUrl).openConnection() as HttpURLConnection
+                    conn.connectTimeout = 8000
+                    conn.readTimeout = 8000
+                    conn.setRequestProperty("User-Agent", web.settings.userAgentString)
+                    conn.setRequestProperty("Cache-Control", "no-cache")
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    val serverVersion = org.json.JSONObject(body).optString("version", "")
+                    if (serverVersion.isEmpty()) return@Thread
+                    val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    val lastSeen = prefs.getString("last_server_version", null)
+                    if (lastSeen != null && lastSeen != serverVersion) {
+                        runOnUiThread {
+                            web.clearCache(true)
+                        }
+                    }
+                    prefs.edit().putString("last_server_version", serverVersion).apply()
+                } catch (_: Exception) {
+                    // آفلاین/خطا — بی‌صدا
+                }
+            }.start()
+        } catch (_: Exception) {}
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView(state: Bundle?) {
         web.settings.apply {
@@ -142,9 +175,9 @@ class MainActivity : AppCompatActivity() {
             useWideViewPort = true
             mediaPlaybackRequiresUserGesture = false
             // B-07: منع بارگذاری محتوای مخلوط — روی سرور https هیچ منبع http بارگذاری نمی‌شود
-            // (پس از خود-میزبانی فونت‌ها در وب v2.6.1 هیچ وابستگی خارجی http باقی نمانده است)
+            // (پس از خود-میزبانی فونت‌ها در وب v2.6.1+ هیچ وابستگی خارجی http باقی نمانده است)
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_LOAD
-            userAgentString = "$userAgentString SahandAndroidApp/2.6.1"
+            userAgentString = "$userAgentString SahandAndroidApp/2.8.7"
         }
 
         CookieManager.getInstance().apply {
@@ -254,6 +287,8 @@ class MainActivity : AppCompatActivity() {
             handleSystemDownload(url, contentDisposition, mimeType)
         }
 
+        // v2.8.7 — قبل از بارگذاری: اگر سرور بروزرسانی شده، کش HTTP خالی شود
+        ensureFreshContent()
         if (state != null) web.restoreState(state) else web.loadUrl(serverUrl)
     }
 

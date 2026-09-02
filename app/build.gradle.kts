@@ -11,8 +11,8 @@ android {
         applicationId = "com.sahandservice.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = "2.6.1"
+        versionCode = 3
+        versionName = "2.8.7"
     }
 
     signingConfigs {
