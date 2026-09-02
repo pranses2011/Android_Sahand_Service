@@ -158,7 +158,8 @@ fi
 
 
 # Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
-DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+# (بدون نقل‌قول داخلی — با exec غیرنقل‌قولی پایین سازگار است)
+DEFAULT_JVM_OPTS='-Xmx64m -Xms64m'
 
 # Collect all arguments for the java command:
 #   * args from the command line
@@ -169,7 +170,7 @@ DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
 #   * DEFAULT_JVM_OPTS, JAVA_OPTS, and GRADLE_OPTS environment variables.
 
 # shellcheck disable=SC2086
-exec "$JAVACMD" "$@" $DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS \
+exec "$JAVACMD" $DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS \
     -Dorg.gradle.appname="$APP_BASE_NAME" \
     -classpath "$CLASSPATH" \
     org.gradle.wrapper.GradleWrapperMain \
