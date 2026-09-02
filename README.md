@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)]()
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7f52ff?style=flat-square&logo=kotlin&logoColor=white)]()
-[![Version](https://img.shields.io/badge/نسخه-2.8.7-0ea5a6?style=flat-square)]()
+[![Version](https://img.shields.io/badge/نسخه-2.8.8-0ea5a6?style=flat-square)]()
 [![Apps](https://img.shields.io/badge/اپلیکیشن-2%20اپ-blue?style=flat-square)]()
 [![License](https://img.shields.io/badge/license-Proprietary-red?style=flat-square)]()
 
@@ -18,8 +18,8 @@
 
 | اپ | فایل | مخصوص |
 |---|---|---|
-| 🏢 **سهند سرویس \| نمایندگی** | `SahandService-Agency-v2.8.7.apk` | مدیر و کارمندان دفتر نمایندگی |
-| 👨‍🔧 **سهند سرویس \| سرویس‌کار** | `SahandService-Technician-v2.8.7.apk` | تکنسین‌های حاضر در میدان |
+| 🏢 **سهند سرویس \| نمایندگی** | `SahandService-Agency-v2.8.8.apk` | مدیر و کارمندان دفتر نمایندگی |
+| 👨‍🔧 **سهند سرویس \| سرویس‌کار** | `SahandService-Technician-v2.8.8.apk` | تکنسین‌های حاضر در میدان |
 
 </div>
 
@@ -245,8 +245,8 @@
 ./gradlew assembleAgencyRelease
 
 # خروجی‌ها:
-# app/build/outputs/apk/agency/release/SahandService-Agency-v2.8.7.apk
-# app/build/outputs/apk/tech/release/SahandService-Technician-v2.8.7.apk
+# app/build/outputs/apk/agency/release/SahandService-Agency-v2.8.8.apk
+# app/build/outputs/apk/tech/release/SahandService-Technician-v2.8.8.apk
 ```
 
 **نیازمندی‌ها:** JDK 17+، Android SDK 34 (خیلی از اینترنت دانلود می‌شود — نیازی به نصب جداگانه نیست)
