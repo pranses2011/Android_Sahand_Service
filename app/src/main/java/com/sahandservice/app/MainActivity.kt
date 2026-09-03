@@ -162,7 +162,8 @@ class MainActivity : AppCompatActivity() {
                 web.evaluateJavascript(
                     "(typeof window.__sahandBack === 'function') ? window.__sahandBack() : 'default'"
                 ) { result ->
-                    val r = result?.trim().trim('"') ?: "default"
+                    // v2.9.2 — رفع خطای کامپایل: زنجیرهٔ nullable-safe (?.trim()?.trim())
+                    val r = result?.trim()?.trim('"') ?: "default"
                     when (r) {
                         "exit" -> runOnUiThread { showExitDialog() }
                         "handled" -> { /* وب خودش به داشبورد برگشت */ }
