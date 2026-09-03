@@ -39,6 +39,25 @@ jobs:
             app/build/outputs/apk/agency/release/*.apk
             app/build/outputs/apk/tech/release/*.apk
 
+      # v2.9.2 — ریشهٔ «اپ در ریلز منتشر نشد» (درخواست کاربر):
+      # رلیز فقط روی تگ اجرا می‌شد ولی پوش‌های main بدون تگ رها می‌شدند.
+      # اکنون اگر نسخهٔ versionName تگ نداشته باشد، خودکار تگ زده می‌شود
+      # → ورک‌فلو تگ اجرا می‌شود → ریلز با APK ساخته می‌شود.
+      - name: Auto-tag release on version bump (main)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
+          if [ -z "$VER" ]; then echo "نسخه پیدا نشد"; exit 1; fi
+          if git rev-parse "v${VER}" >/dev/null 2>&1; then
+            echo "تگ v${VER} از قبل موجود است — رلیز قبلاً ساخته شده"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "v${VER}"
+            git push origin "v${VER}"
+            echo "تگ v${VER} ساخته و پوش شد — ریلز توسط ورک‌فلو تگ ساخته می‌شود"
+          fi
+
       - name: Create GitHub Release with APKs (on tags)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
