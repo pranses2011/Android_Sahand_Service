@@ -3,6 +3,9 @@ package com.sahandservice.app
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.DownloadManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -31,6 +34,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
@@ -43,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val PREFS = "sahand_prefs"
         const val KEY_URL = "server_url"
+        const val NOTIF_CHANNEL = "sahand_notifications" // v2.9.1
     }
 
     private lateinit var web: WebView
@@ -96,6 +101,27 @@ class MainActivity : AppCompatActivity() {
         else if (!granted) Toast.makeText(this, R.string.storage_denied, Toast.LENGTH_SHORT).show()
     }
 
+    // v2.9.1 — نتیجهٔ درخواست مجوز نوتیفیکیشن (Android 13+)
+    private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        Toast.makeText(
+            this,
+            if (granted) R.string.notif_granted else R.string.notif_denied,
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    // v2.9.1 — نتیجهٔ درخواست مجوز میکروفون (ضبط پیام صوتی چت)
+    private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val req = pendingAudioRequest
+        pendingAudioRequest = null
+        runOnUiThread {
+            if (granted) req?.grant(req.resources)
+            else req?.deny()
+        }
+    }
+
+    private var pendingAudioRequest: PermissionRequest? = null
+
     private var pendingDownload: Triple<String, String, ByteArray>? = null
 
     // ── Lifecycle ─────────────────────────────────────────────
@@ -117,14 +143,34 @@ class MainActivity : AppCompatActivity() {
         web = findViewById(R.id.webview)
         progressBar = findViewById(R.id.progress)
 
+        // v2.9.1 — کانال اعلان + درخواست مجوز نوتیفیکیشن (Android 13+)
+        createNotificationChannel()
+        requestNotificationPermissionIfNeeded()
+
         setupWebView(savedInstanceState ?: intent.getBundleExtra("webState"))
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (web.canGoBack() && !pageError) {
-                    web.goBack()
-                } else {
+                if (pageError) {
                     showExitDialog()
+                    return
+                }
+                // v2.9.1 (درخواست کاربر) — منطق بازگشت به وب سپرده می‌شود:
+                //   window.__sahandBack() → "exit" (روی داشبورد است → کادر تأیید خروج)
+                //                        → "handled" (به داشبورد برگشت)
+                //   اگر پل وجود نداشت (خطا/صفحه قدیمی) → رفتار قبلی (goBack/خروج)
+                web.evaluateJavascript(
+                    "(typeof window.__sahandBack === 'function') ? window.__sahandBack() : 'default'"
+                ) { result ->
+                    val r = result?.trim().trim('"') ?: "default"
+                    when (r) {
+                        "exit" -> runOnUiThread { showExitDialog() }
+                        "handled" -> { /* وب خودش به داشبورد برگشت */ }
+                        else -> runOnUiThread {
+                            // fallback — رفتار قدیمی
+                            if (web.canGoBack()) web.goBack() else showExitDialog()
+                        }
+                    }
                 }
             }
         })
@@ -177,7 +223,7 @@ class MainActivity : AppCompatActivity() {
             // B-07: منع بارگذاری محتوای مخلوط — روی سرور https هیچ منبع http بارگذاری نمی‌شود
             // (پس از خود-میزبانی فونت‌ها در وب v2.6.1+ هیچ وابستگی خارجی http باقی نمانده است)
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            userAgentString = "$userAgentString SahandAndroidApp/2.8.8"
+            userAgentString = "$userAgentString SahandAndroidApp/2.9.1"
         }
 
         CookieManager.getInstance().apply {
@@ -188,6 +234,9 @@ class MainActivity : AppCompatActivity() {
         // Service Worker (PWA) با رفتار پیش‌فرض WebView کار می‌کند — نیازی به تنظیم اضافه نیست
 
         web.addJavascriptInterface(FileBridge(), "SahandFiles")
+        // v2.9.1 — پل اعلان‌های سیستمی: وب با SahandNative.showNotification اعلان
+        // سیستمی اندروید می‌فرستد (WebView از Notification API وب پشتیبانی نمی‌کند)
+        web.addJavascriptInterface(NativeBridge(), "SahandNative")
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -279,7 +328,22 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPermissionRequest(request: PermissionRequest) {
-                runOnUiThread { request.grant(request.resources) }
+                runOnUiThread {
+                    val res = request.resources ?: return@runOnUiThread
+                    // v2.9.1 — درخواست میکروفون از وب (ضبط پیام صوتی چت) →
+                    // مجوز اندرویدی RECORD_AUDIO هم تضمین می‌شود
+                    val needsAudio = res.any { it == "android.webkit.resource.AUDIO_CAPTURE" }
+                    if (needsAudio &&
+                        Build.VERSION.SDK_INT >= 23 &&
+                        checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                            != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        pendingAudioRequest = request
+                        micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                    } else {
+                        request.grant(res)
+                    }
+                }
             }
         }
 
@@ -504,6 +568,93 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         if (::web.isInitialized) web.destroy()
         super.onDestroy()
+    }
+
+    // ── v2.9.1 — Notification channel + System notifications bridge ──
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT < 26) return
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (nm.getNotificationChannel(NOTIF_CHANNEL) != null) return
+        val ch = NotificationChannel(
+            NOTIF_CHANNEL,
+            getString(R.string.notif_channel_name),
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = getString(R.string.notif_channel_desc)
+            enableVibration(true)
+        }
+        nm.createNotificationChannel(ch)
+    }
+
+    /** درخواست مجوز اعلان روی Android 13+ (یک‌بار در نخستین اجرا) */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < 33) return
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+            == PackageManager.PERMISSION_GRANTED
+        ) return
+        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (prefs.getBoolean("notif_perm_asked", false)) return
+        prefs.edit().putBoolean("notif_perm_asked", true).apply()
+        notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    /** نمایش اعلان سیستمی — id عددی از hash تگ برای به‌روزرسانی هم‌نوع‌ها */
+    private fun postSystemNotification(title: String, body: String, tag: String, url: String) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            createNotificationChannel()
+            val intent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("notif_url", url)
+            }
+            val pending = PendingIntent.getActivity(
+                this, tag.hashCode(), intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val notif = NotificationCompat.Builder(this, NOTIF_CHANNEL)
+                .setSmallIcon(R.drawable.ic_stat_notify)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setAutoCancel(true)
+                .setVibrate(longArrayOf(200, 100, 200))
+                .setContentIntent(pending)
+                .build()
+            nm.notify(tag.hashCode(), notif)
+        } catch (_: Exception) {
+            // fail-soft
+        }
+    }
+
+    /**
+     * v2.9.1 — SahandNative: پل JS ← اندروید
+     * وب‌اپ (system-notify.ts) این متدها را صدا می‌زند تا اعلان سیستمی نمایش
+     * داده شود؛ در مرورگر همین منطق با Service Worker انجام می‌شود.
+     */
+    inner class NativeBridge {
+        @JavascriptInterface
+        fun showNotification(title: String, body: String, tag: String, url: String) {
+            runOnUiThread { postSystemNotification(title, body, tag, url) }
+        }
+
+        @JavascriptInterface
+        fun isNotificationEnabled(): Boolean {
+            return if (Build.VERSION.SDK_INT >= 33)
+                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+                    PackageManager.PERMISSION_GRANTED
+            else true
+        }
+
+        @JavascriptInterface
+        fun requestNotificationPermission() {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED
+            ) {
+                runOnUiThread { notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS) }
+            }
+        }
     }
 
     // Exit dialog with settings shortcut

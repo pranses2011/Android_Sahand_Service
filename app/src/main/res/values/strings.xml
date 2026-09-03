@@ -35,7 +35,13 @@
     <string name="clear_server">حذف سرور فعلی</string>
     <string name="panel_version_fmt">نسخه پنل: %1$s — %2$s</string>
     <string name="panel_version_short">نسخه پنل: %1$s</string>
-    <string name="setup_footer">سهند سرویس — نسخه اندروید v2.4.5\nبا هر بروزرسانی پنل، اپلیکیشن خودکار بروز می‌شود</string>
+    <string name="setup_footer">سهند سرویس — نسخه اندروید v2.9.1\nبا هر بروزرسانی پنل، اپلیکیشن خودکار بروز می‌شود</string>
+
+    <!-- v2.9.1 — نوتیفیکیشن سیستمی -->
+    <string name="notif_channel_name">اعلان‌های سهند سرویس</string>
+    <string name="notif_channel_desc">اعلان‌های جدید سرویس، پیام‌های چت و رویدادهای امنیتی</string>
+    <string name="notif_granted">اعلان‌های سیستمی فعال شد ✓</string>
+    <string name="notif_denied">بدون اجازه اعلان، اطلاع‌رسانی سیستمی نمایش داده نمی‌شود</string>
 
     <!-- صفحه خطا -->
     <string name="error_title">ارتباط با سرور برقرار نشد</string>

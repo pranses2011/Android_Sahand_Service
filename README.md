@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)]()
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7f52ff?style=flat-square&logo=kotlin&logoColor=white)]()
-[![Version](https://img.shields.io/badge/نسخه-2.8.8-0ea5a6?style=flat-square)]()
+[![Version](https://img.shields.io/badge/نسخه-2.9.1-0ea5a6?style=flat-square)]()
 [![Apps](https://img.shields.io/badge/اپلیکیشن-2%20اپ-blue?style=flat-square)]()
 [![License](https://img.shields.io/badge/license-Proprietary-red?style=flat-square)]()
 
@@ -18,12 +18,29 @@
 
 | اپ | فایل | مخصوص |
 |---|---|---|
-| 🏢 **سهند سرویس \| نمایندگی** | `SahandService-Agency-v2.8.8.apk` | مدیر و کارمندان دفتر نمایندگی |
-| 👨‍🔧 **سهند سرویس \| سرویس‌کار** | `SahandService-Technician-v2.8.8.apk` | تکنسین‌های حاضر در میدان |
+| 🏢 **سهند سرویس \| نمایندگی** | `SahandService-Agency-v2.9.1.apk` | مدیر و کارمندان دفتر نمایندگی |
+| 👨‍🔧 **سهند سرویس \| سرویس‌کار** | `SahandService-Technician-v2.9.1.apk` | تکنسین‌های حاضر در میدان |
 
 </div>
 
 ---
+
+## 🔔 نوتیفیکیشن سیستمی + مجوزها (v2.9.1)
+
+اعلان‌های سامانه اکنون به‌صورت **اعلان سیستمی اندروید** نمایش داده می‌شوند (نه فقط داخل اپ):
+- پل بومی `SahandNative` در WebView — وب‌اپ با `showNotification()` اعلان سیستمی می‌فرستد
+- کانال اعلان «اعلان‌های سهند سرویس» با اولویت بالا + ویبره
+- درخواست خودکار مجوز `POST_NOTIFICATIONS` (Android 13+)
+
+مجوزهای اضافه‌شده برای عملکرد کامل:
+| مجوز | کاربرد |
+|---|---|
+| `POST_NOTIFICATIONS` | نمایش اعلان‌های سیستمی (Android 13+) |
+| `RECORD_AUDIO` + `MODIFY_AUDIO_SETTINGS` | ضبط پیام صوتی در چت |
+| `CAMERA` | گرفتن عکس دستگاه از داخل اپ |
+| `WRITE/READ_EXTERNAL_STORAGE` | ذخیرهٔ خروجی‌ها (تا Android 9/12) |
+| `READ_MEDIA_IMAGES/VIDEO/AUDIO` | انتخاب فایل از گالری (Android 13+) |
+| `ACCESS_FINE/COARSE_LOCATION` | ردیابی سرویسکاران + موقعیت در چت |
 
 ## 📑 فهرست مطالب
 
@@ -245,8 +262,8 @@
 ./gradlew assembleAgencyRelease
 
 # خروجی‌ها:
-# app/build/outputs/apk/agency/release/SahandService-Agency-v2.8.8.apk
-# app/build/outputs/apk/tech/release/SahandService-Technician-v2.8.8.apk
+# app/build/outputs/apk/agency/release/SahandService-Agency-v2.9.1.apk
+# app/build/outputs/apk/tech/release/SahandService-Technician-v2.9.1.apk
 ```
 
 **نیازمندی‌ها:** JDK 17+، Android SDK 34 (خیلی از اینترنت دانلود می‌شود — نیازی به نصب جداگانه نیست)
