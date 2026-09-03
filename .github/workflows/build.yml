@@ -39,29 +39,48 @@ jobs:
             app/build/outputs/apk/agency/release/*.apk
             app/build/outputs/apk/tech/release/*.apk
 
-      # v2.9.2 — ریشهٔ «اپ در ریلز منتشر نشد» (درخواست کاربر):
-      # رلیز فقط روی تگ اجرا می‌شد ولی پوش‌های main بدون تگ رها می‌شدند.
-      # اکنون اگر نسخهٔ versionName تگ نداشته باشد، خودکار تگ زده می‌شود
-      # → ورک‌فلو تگ اجرا می‌شود → ریلز با APK ساخته می‌شود.
-      - name: Auto-tag release on version bump (main)
+      # ═══════════════════════════════════════════════════════════
+      # v2.9.2 — ریشهٔ «اپ اندروید در ریلز منتشر نشد» (درخواست کاربر):
+      # ۱) ریلز فقط روی تگ اجرا می‌شد ولی پوش‌های main بدون تگ رها می‌شدند
+      # ۲) پوشِ تگ با GITHUB_TOKEN ورک‌فلوی جدیدی راه نمی‌اندازد (سیاست GitHub
+      #    برای جلوگیری از recursion) → ریلز باید در «همین اجرا» ساخته شود
+      # راه‌حل: اگر ریلزِ نسخهٔ فعلی وجود نداشته باشد، تگ (در صورت نبود) زده
+      # می‌شود و ریلز با همان APKهای همین اجرا ساخته می‌شود.
+      # ═══════════════════════════════════════════════════════════
+      - name: Ensure tag + release needed for current version
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        id: maybe_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
           if [ -z "$VER" ]; then echo "نسخه پیدا نشد"; exit 1; fi
-          if git rev-parse "v${VER}" >/dev/null 2>&1; then
-            echo "تگ v${VER} از قبل موجود است — رلیز قبلاً ساخته شده"
-          else
+          TAG="v${VER}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          # تگ نبود → بساز و پوش
+          if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
             git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag "v${VER}"
-            git push origin "v${VER}"
-            echo "تگ v${VER} ساخته و پوش شد — ریلز توسط ورک‌فلو تگ ساخته می‌شود"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag "${TAG}"
+            git push origin "${TAG}"
+            echo "تگ ${TAG} ساخته و پوش شد"
+          else
+            echo "تگ ${TAG} از قبل موجود است"
+          fi
+          # ریلز نبود → در همین اجرا ساخته می‌شود
+          if gh release view "${TAG}" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            echo "ریلز ${TAG} از قبل موجود است"
+          else
+            echo "created=true" >> "$GITHUB_OUTPUT"
+            echo "ریلز ${TAG} در همین اجرا ساخته می‌شود"
           fi
 
-      - name: Create GitHub Release with APKs (on tags)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Create GitHub Release with APKs
+        if: startsWith(github.ref, 'refs/tags/v') || steps.maybe_release.outputs.created == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.maybe_release.outputs.tag || github.ref_name }}
           generate_release_notes: true
           files: |
             app/build/outputs/apk/agency/release/*.apk
