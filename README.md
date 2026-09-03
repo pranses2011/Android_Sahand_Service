@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)]()
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7f52ff?style=flat-square&logo=kotlin&logoColor=white)]()
-[![Version](https://img.shields.io/badge/نسخه-2.9.2-0ea5a6?style=flat-square)]()
+[![Version](https://img.shields.io/badge/نسخه-2.9.6-0ea5a6?style=flat-square)]()
 [![Apps](https://img.shields.io/badge/اپلیکیشن-2%20اپ-blue?style=flat-square)]()
 [![License](https://img.shields.io/badge/license-Proprietary-red?style=flat-square)]()
 
@@ -18,14 +18,22 @@
 
 | اپ | فایل | مخصوص |
 |---|---|---|
-| 🏢 **سهند سرویس \| نمایندگی** | `SahandService-Agency-v2.9.2.apk` | مدیر و کارمندان دفتر نمایندگی |
-| 👨‍🔧 **سهند سرویس \| سرویس‌کار** | `SahandService-Technician-v2.9.2.apk` | تکنسین‌های حاضر در میدان |
+| 🏢 **سهند سرویس \| نمایندگی** | `SahandService-Agency-v2.9.6.apk` | مدیر و کارمندان دفتر نمایندگی |
+| 👨‍🔧 **سهند سرویس \| سرویس‌کار** | `SahandService-Technician-v2.9.6.apk` | تکنسین‌های حاضر در میدان |
 
 </div>
 
 ---
 
-## 🔔 نوتیفیکیشن سیستمی + مجوزها (v2.9.2)
+## 🔔 نوتیفیکیشن سیستمی + مجوزها (v2.9.2+)
+
+## 🆕 v2.9.6 — ذخیرهٔ فایل + اعلان در پس‌زمینه + بک هوشمند
+
+- **ذخیرهٔ فایل‌ها:** مسیرهای `blob:`/`data:` که به DownloadListener می‌رسیدند بی‌صدا رها می‌شدند — اکنون blob از صفحه (Promise + evaluateJavascript) خوانده و با MediaStore در پوشهٔ Downloads ذخیره می‌شود؛ فایل‌های data: مستقیم ذخیره می‌شوند.
+- **اعلان در پس‌زمینه:** وقتی اپ در پس‌زمینه است (onPause)، خودِ اپ هر ۶۰ ثانیه شمار پیام‌های خوانده‌نشده (`/api/chat?unread=mine`) و اعلان‌ها/سرویس‌های در انتظار را با کوکی نشست وب می‌شمارد و در صورت افزایش، اعلان سیستمی می‌فرستد. با onResume وب‌اپ polling خودش را برمی‌گرداند.
+- **کارت اعلان در تنظیمات:** در اپ دیگر پیام «مرورگر شما از Web Push پشتیبانی نمی‌کند» دیده نمی‌شود — کارت «اعلان‌های اپ اندروید» با وضعیت و دکمهٔ فعال‌سازی از پل بومی نمایش داده می‌شود (سمت وب v2.9.6).
+- **کلید بازگشت:** اگر مودالی باز باشد، هر فشار دکمهٔ بازگشت بالاترین لایه را می‌بندد (سمت وب v2.9.6)؛ سپس در داشبورد کادر تأیید خروج و وگرنه بازگشت به داشبورد.
+- versionCode **7** — نسخهٔ **2.9.6**
 
 اعلان‌های سامانه اکنون به‌صورت **اعلان سیستمی اندروید** نمایش داده می‌شوند (نه فقط داخل اپ):
 - پل بومی `SahandNative` در WebView — وب‌اپ با `showNotification()` اعلان سیستمی می‌فرستد
@@ -262,8 +270,8 @@
 ./gradlew assembleAgencyRelease
 
 # خروجی‌ها:
-# app/build/outputs/apk/agency/release/SahandService-Agency-v2.9.2.apk
-# app/build/outputs/apk/tech/release/SahandService-Technician-v2.9.2.apk
+# app/build/outputs/apk/agency/release/SahandService-Agency-v2.9.6.apk
+# app/build/outputs/apk/tech/release/SahandService-Technician-v2.9.6.apk
 ```
 
 **نیازمندی‌ها:** JDK 17+، Android SDK 34 (خیلی از اینترنت دانلود می‌شود — نیازی به نصب جداگانه نیست)

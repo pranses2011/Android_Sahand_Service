@@ -224,7 +224,7 @@ class MainActivity : AppCompatActivity() {
             // B-07: منع بارگذاری محتوای مخلوط — روی سرور https هیچ منبع http بارگذاری نمی‌شود
             // (پس از خود-میزبانی فونت‌ها در وب v2.6.1+ هیچ وابستگی خارجی http باقی نمانده است)
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            userAgentString = "$userAgentString SahandAndroidApp/2.9.1"
+            userAgentString = "$userAgentString SahandAndroidApp/2.9.6"
         }
 
         CookieManager.getInstance().apply {
@@ -361,7 +361,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleSystemDownload(url: String, contentDisposition: String?, mimeType: String?) {
         try {
-            if (url.startsWith("blob:") || url.startsWith("data:")) return // handled by JS bridge
+            // v2.9.6 — blob:/data: از مسیر JS hook می‌آیند؛ اگر تا اینجا رسیده
+            // یعنی هوک نداد (مثلاً window.open) → مستقیم از صفحه/رشته بخوان و ذخیره کن
+            if (url.startsWith("blob:")) {
+                runOnUiThread { saveBlobFromWebView(url, contentDisposition, mimeType) }
+                return
+            }
+            if (url.startsWith("data:")) {
+                saveDataUrlDirect(url)
+                return
+            }
             val request = DownloadManager.Request(Uri.parse(url)).apply {
                 val cookies = CookieManager.getInstance().getCookie(url)
                 if (cookies != null) addRequestHeader("cookie", cookies)
@@ -386,6 +395,80 @@ class MainActivity : AppCompatActivity() {
 
     private fun URLUtilGuessFileName(url: String, contentDisposition: String?, mimeType: String?): String {
         return android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+    }
+
+    /** v2.9.6 — ذخیرهٔ blob: با خواندن از Blob ثبت‌شده در صفحه (Promise → evaluateJavascript) */
+    private fun saveBlobFromWebView(blobUrl: String, contentDisposition: String?, mimeType: String?) {
+        try {
+            val fallbackName = URLDecoder.decode(
+                try {
+                    URLUtilGuessFileName(blobUrl, contentDisposition, mimeType)
+                } catch (_: Exception) {
+                    "sahand-download"
+                }, "UTF-8"
+            )
+            val js = "(function(){try{var b=window.__sahandBlobs&&window.__sahandBlobs['" + blobUrl +
+                "'];if(!b)return null;return new Promise(function(res){var r=new FileReader;" +
+                "r.onloadend=function(){res(JSON.stringify({mime:b.type||'application/octet-stream',b64:String(r.result).split(',')[1]||''}))};" +
+                "r.onerror=function(){res(null)};r.readAsDataURL(b)})}catch(e){return null}})()"
+            web.evaluateJavascript(js) { result ->
+                runOnUiThread {
+                    try {
+                        if (result == null || result == "null" || result.length < 10) {
+                            Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show()
+                            return@runOnUiThread
+                        }
+                        val obj = org.json.JSONObject(result)
+                        val mime = obj.optString("mime", "application/octet-stream").ifBlank { "application/octet-stream" }
+                        val b64 = obj.optString("b64", "")
+                        if (b64.isBlank()) {
+                            Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show()
+                            return@runOnUiThread
+                        }
+                        saveDirectFile(fallbackName, mime, Base64.decode(b64, Base64.DEFAULT))
+                    } catch (_: Exception) {
+                        Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, getString(R.string.download_failed) + ": " + e.message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** v2.9.6 — ذخیرهٔ مستقیم data: URL (بدون جاوااسکریپت) */
+    private fun saveDataUrlDirect(dataUrl: String) {
+        try {
+            val commaIdx = dataUrl.indexOf(',')
+            if (commaIdx < 0) return
+            val header = dataUrl.substring(5, commaIdx) // after "data:"
+            val mime = if (header.endsWith(";base64")) header.removeSuffix(";base64")
+                .ifEmpty { "application/octet-stream" } else "text/plain"
+            val b64 = dataUrl.substring(commaIdx + 1)
+            val bytes = if (header.endsWith(";base64"))
+                Base64.decode(b64, Base64.DEFAULT)
+            else b64.toByteArray(Charsets.UTF_8)
+            val name = "sahand-" + System.currentTimeMillis() + guessExtFromMime(mime)
+            runOnUiThread { saveDirectFile(name, mime, bytes) }
+        } catch (_: Exception) {
+            runOnUiThread { Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show() }
+        }
+    }
+
+    private fun guessExtFromMime(mime: String): String {
+        return when {
+            mime.startsWith("image/png") -> ".png"
+            mime.startsWith("image/jpeg") -> ".jpg"
+            mime.startsWith("image/webp") -> ".webp"
+            mime.startsWith("image/gif") -> ".gif"
+            mime.startsWith("text/csv") || mime == "text/comma-separated-values" -> ".csv"
+            mime.contains("json") -> ".json"
+            mime.startsWith("text/") -> ".txt"
+            mime.startsWith("application/zip") -> ".zip"
+            mime.contains("pdf") -> ".pdf"
+            mime.startsWith("audio/") -> ".webm"
+            else -> ".bin"
+        }
     }
 
     private fun createCameraIntent(): Intent? {
@@ -559,11 +642,15 @@ class MainActivity : AppCompatActivity() {
             web.onPause()
             CookieManager.getInstance().flush()
         }
+        // v2.9.6 — اعلان‌ها در پس‌زمینه: polling سبک تا وقتی اپ در پس‌زمینه است
+        startBackgroundNotifyPolling()
     }
 
     override fun onResume() {
         super.onResume()
         if (::web.isInitialized) web.onResume()
+        // v2.9.6 — وب‌اپ خودش polling را برمی‌گرداند
+        stopBackgroundNotifyPolling()
     }
 
     override fun onDestroy() {
@@ -656,6 +743,132 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread { notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS) }
             }
         }
+    }
+
+    // ── v2.9.6 — اعلان‌های پس‌زمینه (polling سبک وقتی اپ pause شده) ──
+    // WebView در pause تایمرهای JS را متوقف می‌کند؛ برای اینکه اعلان‌ها
+    // «وقتی اپ در پس‌زمینه است» هم برسند، اپ خودش هر ۶۰ ثانیه شمارِ
+    // خوانده‌نشده‌ها را از سرور می‌خواند (با کوکی نشست وب) و در صورت
+    // افزایش، اعلان سیستمی می‌فرستد.
+
+    private var bgPollHandler: android.os.Handler? = null
+    private var bgPollRunnable: Runnable? = null
+    private var bgChatUnread = -1
+    private var bgNotifUnread = -1
+    private var bgUserPanel: String? = null
+    private var bgTechId: String? = null
+
+    private fun startBackgroundNotifyPolling() {
+        if (bgPollHandler != null) return
+        if (!::web.isInitialized) return
+        try {
+            // هویت کاربر از localStorage (asm-auth) — برای endpoint اعلان‌ها
+            web.evaluateJavascript(
+                "(function(){try{var a=JSON.parse(localStorage.getItem('asm-auth')||'null');" +
+                    "return a?JSON.stringify({panel:(a.state&&a.state.panel)||'',techId:(a.state&&a.state.technicianId)||''}):null}" +
+                    "}catch(e){return null}})()"
+            ) { res ->
+                try {
+                    if (res != null && res != "null" && res.length > 4) {
+                        val o = org.json.JSONObject(res)
+                        bgUserPanel = o.optString("panel", "").ifBlank { null }
+                        bgTechId = o.optString("techId", "").ifBlank { null }
+                    }
+                } catch (_: Exception) {}
+            }
+            bgChatUnread = -1
+            bgNotifUnread = -1
+            val h = android.os.Handler(android.os.Looper.getMainLooper())
+            val r = object : Runnable {
+                override fun run() {
+                    pollUnreadInBackground()
+                    h.postDelayed(this, 60_000)
+                }
+            }
+            h.postDelayed(r, 20_000)
+            bgPollHandler = h
+            bgPollRunnable = r
+        } catch (_: Exception) {}
+    }
+
+    private fun stopBackgroundNotifyPolling() {
+        try {
+            bgPollRunnable?.let { r -> bgPollHandler?.removeCallbacks(r) }
+        } catch (_: Exception) {}
+        bgPollHandler = null
+        bgPollRunnable = null
+    }
+
+    /** خواندن متن پاسخ GET با کوکی نشست وب (روی نخ جدا) */
+    private fun fetchBodyWithSession(path: String): String? {
+        return try {
+            val conn = openConnection(serverUrl.trimEnd('/') + path, "GET")
+            try {
+                if (conn.responseCode !in 200..299) return null
+                conn.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                conn.disconnect()
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun pollUnreadInBackground() {
+        Thread {
+            try {
+                // ۱) پیام‌های چت خوانده‌نشدهٔ «من» (همهٔ گفتگوها)
+                val chatBody = fetchBodyWithSession("/api/chat?unread=mine")
+                if (chatBody != null) {
+                    val cu = try {
+                        org.json.JSONObject(chatBody).optInt("unreadCount", 0)
+                    } catch (_: Exception) { -1 }
+                    if (cu >= 0) {
+                        val first = bgChatUnread < 0
+                        if (!first && cu > bgChatUnread) {
+                            postSystemNotification(
+                                "پیام جدید",
+                                "${cu - bgChatUnread} پیام خوانده‌نشده دارید — برای مشاهده چت را باز کنید",
+                                "chat-unread-bg", "/"
+                            )
+                        }
+                        bgChatUnread = cu
+                    }
+                }
+                // ۲) اعلان‌های سرویس‌کار / سرویس‌های در انتظار نمایندگی
+                val isTech = bgUserPanel == "technician" && !bgTechId.isNullOrEmpty()
+                val path = if (isTech) "/api/notification?technicianId=$bgTechId" else "/api/entity?type=service&status=pending"
+                val body = fetchBodyWithSession(path)
+                if (body != null) {
+                    val n = try {
+                        val arr = org.json.JSONArray(body)
+                        if (isTech) {
+                            var c = 0
+                            for (i in 0 until arr.length()) {
+                                val o = arr.optJSONObject(i) ?: continue
+                                if (!o.optBoolean("isRead", false)) c++
+                            }
+                            c
+                        } else {
+                            arr.length()
+                        }
+                    } catch (_: Exception) { -1 }
+                    if (n >= 0) {
+                        val first = bgNotifUnread < 0
+                        if (!first && n > bgNotifUnread) {
+                            if (isTech) {
+                                postSystemNotification("اعلان جدید", "${n - bgNotifUnread} اعلان خوانده‌نشده جدید دارید", "notif-bg", "/")
+                            } else {
+                                postSystemNotification("سرویس جدید", "${n - bgNotifUnread} سرویس جدید در انتظار بررسی", "notif-bg", "/")
+                            }
+                        }
+                        bgNotifUnread = n
+                    }
+                }
+            } catch (_: Exception) {
+                // fail-soft
+            }
+        }.start()
     }
 
     // Exit dialog with settings shortcut
