@@ -180,9 +180,13 @@ class MainActivity : AppCompatActivity() {
     // ── v2.8.7 — تحویل تضمینی آپدیت‌های سرور به اپ ──
     // WebView کش HTTP خودش را نگه می‌دارد؛ اگر سرور بروزرسانی شده باشد
     // (version.json عوض شده) کش HTTP WebView خالی می‌شود تا فایل‌های استاتیک
-    // جدید (چانک‌ها/پچ‌ها) حتماً از سرور بیایند. Service Worker کش صفحه خودش
-    // را با deployRefresh مرورگر (smart-poll.js v2.8.6) تازه می‌کند.
-    private fun ensureFreshContent() {
+    // جدید (چانک‌ها/پچ‌ها) حتماً از سرور بیایند.
+    // v2.9.7 (گزارش کاربر: «پنل رو آپدیت کردم ولی هنوز نسخهٔ قدیمی را نشان
+    // می‌دهد»): (۱) علاوه بر پاک‌کردن کش، صفحه هم بارگذاری مجدد می‌شود —
+    // قبلاً فقط کش خالی می‌شد و صفحهٔ قدیمیِ در حافظه می‌ماند تا restart
+    // دستی؛ (۲) بررسی دوره‌ای هر ۵ دقیقه (نه فقط هنگام ساخت) — اپ‌های
+    // همیشه‌باز هرگز آپدیت سرور را نمی‌دیدند. یک‌بار در هر تغییر نسخه.
+    private fun ensureFreshContent(periodic: Boolean = false) {
         try {
             val verUrl = serverUrl.trimEnd('/') + "/version.json"
             Thread {
@@ -199,7 +203,11 @@ class MainActivity : AppCompatActivity() {
                     val lastSeen = prefs.getString("last_server_version", null)
                     if (lastSeen != null && lastSeen != serverVersion) {
                         runOnUiThread {
-                            web.clearCache(true)
+                            try { web.clearCache(true) } catch (_: Exception) {}
+                            // v2.9.7 — صفحهٔ زنده هم تازه شود (تحویل تضمینی):
+                            // صفحهٔ قدیمی در حافظهٔ WebView می‌ماند و فوتر
+                            // نسخهٔ قدیمی را نشان می‌داد تا restart دستی.
+                            try { web.reload() } catch (_: Exception) {}
                         }
                     }
                     prefs.edit().putString("last_server_version", serverVersion).apply()
@@ -208,6 +216,15 @@ class MainActivity : AppCompatActivity() {
                 }
             }.start()
         } catch (_: Exception) {}
+    }
+
+    /** v2.9.7 — بررسی دوره‌ای نسخهٔ سرور (اپ‌های همیشه‌باز) */
+    private val versionCheckHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val versionCheckTask = object : Runnable {
+        override fun run() {
+            try { ensureFreshContent(periodic = true) } catch (_: Exception) {}
+            versionCheckHandler.postDelayed(this, 5 * 60 * 1000L)
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -224,7 +241,7 @@ class MainActivity : AppCompatActivity() {
             // B-07: منع بارگذاری محتوای مخلوط — روی سرور https هیچ منبع http بارگذاری نمی‌شود
             // (پس از خود-میزبانی فونت‌ها در وب v2.6.1+ هیچ وابستگی خارجی http باقی نمانده است)
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            userAgentString = "$userAgentString SahandAndroidApp/2.9.6"
+            userAgentString = "$userAgentString SahandAndroidApp/2.9.7"
         }
 
         CookieManager.getInstance().apply {
@@ -642,6 +659,8 @@ class MainActivity : AppCompatActivity() {
             web.onPause()
             CookieManager.getInstance().flush()
         }
+        // v2.9.7 — بررسی دوره‌ای نسخهٔ سرور متوقف (اپ در پس‌زمینه)
+        versionCheckHandler.removeCallbacks(versionCheckTask)
         // v2.9.6 — اعلان‌ها در پس‌زمینه: polling سبک تا وقتی اپ در پس‌زمینه است
         startBackgroundNotifyPolling()
     }
@@ -649,6 +668,11 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (::web.isInitialized) web.onResume()
+        // v2.9.7 — بازگشت به اپ: فوراً نسخه چک کن + هر ۵ دقیقه (تحویل
+        // تضمینی آپدیت سرور برای اپ‌های همیشه‌باز)
+        try { ensureFreshContent(periodic = true) } catch (_: Exception) {}
+        versionCheckHandler.removeCallbacks(versionCheckTask)
+        versionCheckHandler.postDelayed(versionCheckTask, 5 * 60 * 1000L)
         // v2.9.6 — وب‌اپ خودش polling را برمی‌گرداند
         stopBackgroundNotifyPolling()
     }
