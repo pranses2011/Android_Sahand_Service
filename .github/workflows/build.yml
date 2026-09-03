@@ -57,15 +57,15 @@ jobs:
           if [ -z "$VER" ]; then echo "نسخه پیدا نشد"; exit 1; fi
           TAG="v${VER}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          # تگ نبود → بساز و پوش
-          if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
+          # بررسی تگ «از راه دور» — checkout سطحی (fetch-depth=1) تگ‌ها را ندارد
+          if [ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]; then
+            echo "تگ ${TAG} از قبل موجود است"
+          else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git tag "${TAG}"
             git push origin "${TAG}"
             echo "تگ ${TAG} ساخته و پوش شد"
-          else
-            echo "تگ ${TAG} از قبل موجود است"
           fi
           # ریلز نبود → در همین اجرا ساخته می‌شود
           if gh release view "${TAG}" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
