@@ -186,6 +186,22 @@ class MainActivity : AppCompatActivity() {
     // قبلاً فقط کش خالی می‌شد و صفحهٔ قدیمیِ در حافظه می‌ماند تا restart
     // دستی؛ (۲) بررسی دوره‌ای هر ۵ دقیقه (نه فقط هنگام ساخت) — اپ‌های
     // همیشه‌باز هرگز آپدیت سرور را نمی‌دیدند. یک‌بار در هر تغییر نسخه.
+    /** v2.9.10 — بارگذاری مجدد «بدون کش» (گزارش کاربر: «موارد جدیدی که به منو
+     * اضافه شده مثل گزارش‌گیری سفارشی و مابقی موارد جدید در اپلیکیشن وجود نداره»).
+     * ریشه: کش HTTP وب‌ویو (و نه SW) نسخهٔ کهنهٔ index.html/چانک‌ها را نگه می‌داشت —
+     * clearCache(true) async است و ممکن است قبل از reload تمام نشود. اکنون:
+     *   ۱) cacheMode = LOAD_NO_CACHE (فعال تا پایان بارگذاری)
+     *   ۲) clearCache(true)
+     *   ۳) reload بعد از ۳۰۰ms (فرصت پاک‌سازی)
+     *   ۴) پس از onPageFinished → بازگشت به LOAD_DEFAULT */
+    private fun reloadBypassingCache() {
+        try { web.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE } catch (_: Exception) {}
+        try { web.clearCache(true) } catch (_: Exception) {}
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            try { web.reload() } catch (_: Exception) {}
+        }, 300)
+    }
+
     private fun ensureFreshContent(periodic: Boolean = false) {
         try {
             val verUrl = serverUrl.trimEnd('/') + "/version.json"
@@ -203,11 +219,8 @@ class MainActivity : AppCompatActivity() {
                     val lastSeen = prefs.getString("last_server_version", null)
                     if (lastSeen != null && lastSeen != serverVersion) {
                         runOnUiThread {
-                            try { web.clearCache(true) } catch (_: Exception) {}
-                            // v2.9.7 — صفحهٔ زنده هم تازه شود (تحویل تضمینی):
-                            // صفحهٔ قدیمی در حافظهٔ WebView می‌ماند و فوتر
-                            // نسخهٔ قدیمی را نشان می‌داد تا restart دستی.
-                            try { web.reload() } catch (_: Exception) {}
+                            // v2.9.10 — بارگذاری مجدد بدون کش (منوهای جدید فوراً ظاهر می‌شوند)
+                            reloadBypassingCache()
                         }
                     }
                     prefs.edit().putString("last_server_version", serverVersion).apply()
@@ -241,7 +254,7 @@ class MainActivity : AppCompatActivity() {
             // B-07: منع بارگذاری محتوای مخلوط — روی سرور https هیچ منبع http بارگذاری نمی‌شود
             // (پس از خود-میزبانی فونت‌ها در وب v2.6.1+ هیچ وابستگی خارجی http باقی نمانده است)
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            userAgentString = "$userAgentString SahandAndroidApp/2.9.7"
+            userAgentString = "$userAgentString SahandAndroidApp/2.9.10"
         }
 
         CookieManager.getInstance().apply {
@@ -277,6 +290,8 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
                 progressBar.visibility = View.GONE
+                // v2.9.10 — بازگشت حالت کش به پیش‌فرض پس از بارگذاری بدون کش
+                try { web.settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT } catch (_: Exception) {}
                 if (!pageError) injectDownloadHook()
             }
 
