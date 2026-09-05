@@ -7,6 +7,8 @@
     <string name="download_failed">خطا در دانلود</string>
     <string name="saved_to_downloads">ذخیره شد: %1$s\n(پوشه Downloads)</string>
     <string name="save_failed">ذخیره فایل ناموفق بود</string>
+    <string name="save_failed_reason">ذخیره فایل ناموفق بود (%1$s)</string>
+    <string name="saved_app_dir">ذخیره شد: %1$s\nمسیر: %2$s</string>
     <string name="storage_denied">برای ذخیره فایل، اجازه دسترسی به حافظه لازم است</string>
     <string name="exit_hint">برای خروج دوباره دکمه بازگشت را بزنید</string>
     <string name="ssl_blocked">اتصال امن (SSL) سرور معتبر نیست و مسدود شد</string>
@@ -35,13 +37,31 @@
     <string name="clear_server">حذف سرور فعلی</string>
     <string name="panel_version_fmt">نسخه پنل: %1$s — %2$s</string>
     <string name="panel_version_short">نسخه پنل: %1$s</string>
-    <string name="setup_footer">سهند سرویس — نسخه اندروید v2.9.1\nبا هر بروزرسانی پنل، اپلیکیشن خودکار بروز می‌شود</string>
+    <string name="setup_footer">سهند سرویس — نسخه اندروید v2.10.0\nبا هر بروزرسانی پنل، اپلیکیشن خودکار بروز می‌شود</string>
 
     <!-- v2.9.1 — نوتیفیکیشن سیستمی -->
     <string name="notif_channel_name">اعلان‌های سهند سرویس</string>
     <string name="notif_channel_desc">اعلان‌های جدید سرویس، پیام‌های چت و رویدادهای امنیتی</string>
     <string name="notif_granted">اعلان‌های سیستمی فعال شد ✓</string>
     <string name="notif_denied">بدون اجازه اعلان، اطلاع‌رسانی سیستمی نمایش داده نمی‌شود</string>
+
+    <!-- v2.10.0 — هشدار خاموشی اعلان‌ها (درخواست کاربر ۱۱) -->
+    <string name="notif_off_title">اعلان‌های برنامه خاموش است</string>
+    <string name="notif_off_msg">اعلان‌های سیستمی (پیام چت، سرویس جدید و…) برای این برنامه غیرفعال شده است و هیچ اطلاع‌رسانی به شما نمی‌رسد.\n\nبرای فعال‌سازی، در صفحهٔ باز‌شده روی «اعلان‌ها» (Notifications) بزنید و آن را روشن کنید.</string>
+    <string name="notif_open_settings">فعال‌سازی اعلان‌ها</string>
+
+    <!-- v2.10.0 — به‌روزرسانی خودکار اپ (درخواست کاربر ۸) -->
+    <string name="update_title">نسخهٔ جدید برنامه موجود است</string>
+    <string name="update_current">نسخهٔ فعلی: v%1$s</string>
+    <string name="update_new">نسخهٔ جدید: v%1$s</string>
+    <string name="update_download">دانلود و نصب</string>
+    <string name="update_later">بعداً</string>
+    <string name="update_no_url">آدرس فایل نصبی نسخهٔ جدید در تنظیمات پنل ثبت نشده است</string>
+    <string name="update_allow_install">برای نصب خودکار، اجازهٔ «نصب از این منبع» را به برنامه بدهید؛ سپس دوباره «دانلود و نصب» را بزنید</string>
+    <string name="update_dl_title">دانلود نسخهٔ %1$s</string>
+    <string name="update_dl_desc">پس از اتمام دانلود، نصب خودکار باز می‌شود</string>
+    <string name="update_dl_started">دانلود نسخهٔ جدید شروع شد…</string>
+    <string name="update_install_failed">بازکردن نصب‌کننده ناموفق بود</string>
 
     <!-- صفحه خطا -->
     <string name="error_title">ارتباط با سرور برقرار نشد</string>

@@ -149,6 +149,15 @@ class MainActivity : AppCompatActivity() {
 
         setupWebView(savedInstanceState ?: intent.getBundleExtra("webState"))
 
+        // v2.10.0 (درخواست کاربر ۸) — دریافت اتمام دانلودِ APK آپدیت
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, apkDownloadReceiver,
+            android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        // v2.10.0 — بررسی نسخهٔ جدید اپ در نخستین اجرا (دیالوگ فقط یک‌بار برای هر نسخه)
+        try { checkAppUpdate(forceDialog = false) } catch (_: Exception) {}
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (pageError) {
@@ -254,7 +263,7 @@ class MainActivity : AppCompatActivity() {
             // B-07: منع بارگذاری محتوای مخلوط — روی سرور https هیچ منبع http بارگذاری نمی‌شود
             // (پس از خود-میزبانی فونت‌ها در وب v2.6.1+ هیچ وابستگی خارجی http باقی نمانده است)
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            userAgentString = "$userAgentString SahandAndroidApp/2.9.10"
+            userAgentString = "$userAgentString SahandAndroidApp/2.10.0"
         }
 
         CookieManager.getInstance().apply {
@@ -538,6 +547,162 @@ class MainActivity : AppCompatActivity() {
         return conn
     }
 
+    // ═══════════════════════════════════════════════════════════
+    // v2.10.0 (درخواست کاربر ۸) — به‌روزرسانی خودکار اپ
+    // «اپلیکیشن اندروید بصورت اتوماتیک نسخه جدیدش رو چک بکنه و اگه نسخه
+    //  جدید بود با تایید کاربر خودش اتوماتیک دانلود بکنه و نصب بکنه»
+    // منبع: {serverUrl}/android-app.json روی پنل خود کاربر (فایل + APKها با
+    // بستهٔ آپدیت پنل نصب می‌شوند — بدون وابستگی به سایت بیرونی/فیلتر) و در
+    // صورت نبود آن، ریلز GitHub به‌عنوان fallback.
+    // جریان: نسخه > versionCode فعلی → دیالوگ «تغییرات نسخه» (قابل اسکرول —
+    // درخواست کاربر ۱۲) → تأیید → DownloadManager → نصب با
+    // REQUEST_INSTALL_PACKAGES + FileProvider.
+    // ═══════════════════════════════════════════════════════════
+
+    private var updateDialogShownFor: String = ""
+
+    private fun checkAppUpdate(forceDialog: Boolean) {
+        try {
+            val url = serverUrl.trimEnd('/') + "/android-app.json"
+            Thread {
+                try {
+                    val conn = openConnection(url, "GET")
+                    conn.setRequestProperty("Cache-Control", "no-cache")
+                    val body = if (conn.responseCode in 200..299)
+                        conn.inputStream.bufferedReader().use { it.readText() } else null
+                    conn.disconnect()
+                    if (body.isNullOrBlank()) return@Thread
+                    val o = org.json.JSONObject(body)
+                    val newVersion = o.optString("version", "")
+                    val newCode = o.optInt("versionCode", 0)
+                    if (newVersion.isEmpty() || newCode <= BuildConfig.VERSION_CODE) return@Thread
+                    if (!forceDialog && updateDialogShownFor == newVersion) return@Thread
+                    updateDialogShownFor = newVersion
+
+                    val notes = ArrayList<String>()
+                    val arr = o.optJSONArray("notes")
+                    if (arr != null) for (i in 0 until arr.length()) notes.add(arr.optString(i, ""))
+                    val apkField = if (BuildConfig.FLAVOR == "tech") "techApk" else "agencyApk"
+                    var apkUrl = o.optString(apkField, "")
+                    if (apkUrl.isNotEmpty() && apkUrl.startsWith("/"))
+                        apkUrl = serverUrl.trimEnd('/') + apkUrl
+                    if (apkUrl.isEmpty()) apkUrl = o.optString("apk", "")
+
+                    runOnUiThread { showUpdateDialog(newVersion, newCode, notes, apkUrl) }
+                } catch (_: Exception) { /* بی‌صدا */ }
+            }.start()
+        } catch (_: Exception) {}
+    }
+
+    /** دیالوگ «تغییرات نسخه» — بدنهٔ اسکرول‌شونده (درخواست کاربر ۱۲) */
+    private fun showUpdateDialog(version: String, code: Int, notes: ArrayList<String>, apkUrl: String) {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val scroll = android.widget.ScrollView(this)
+        scroll.isVerticalScrollBarEnabled = true
+        val txt = android.widget.TextView(this)
+        txt.text = buildString {
+            append(getString(R.string.update_current, BuildConfig.VERSION_NAME))
+            append("\n")
+            append(getString(R.string.update_new, version))
+            append("\n\n")
+            if (notes.isEmpty()) append("—")
+            else notes.filter { it.isNotBlank() }.forEachIndexed { i, n -> append("• $n\n") }
+        }
+        txt.setPadding(pad, pad / 2, pad, pad / 2)
+        txt.textSize = 14f
+        scroll.addView(txt)
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.update_title)
+            .setView(scroll)
+            .setPositiveButton(R.string.update_download) { _, _ -> downloadAndInstallUpdate(apkUrl, version) }
+            .setNeutralButton(R.string.update_later, null)
+            .show()
+    }
+
+    /** دانلود APK با DownloadManager و سپس اجرای نصب‌کنندهٔ اندروید */
+    private fun downloadAndInstallUpdate(apkUrl: String, version: String) {
+        try {
+            if (apkUrl.isEmpty()) {
+                Toast.makeText(this, R.string.update_no_url, Toast.LENGTH_LONG).show()
+                return
+            }
+            // Android 8+ — اجازهٔ «نصب از منابع ناشناس» برای خودِ اپ
+            if (Build.VERSION.SDK_INT >= 26 &&
+                !packageManager.canRequestPackageInstalls()
+            ) {
+                Toast.makeText(this, R.string.update_allow_install, Toast.LENGTH_LONG).show()
+                try {
+                    startActivity(
+                        Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:$packageName"))
+                    )
+                } catch (_: Exception) {
+                    try {
+                        startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:$packageName")))
+                    } catch (_: Exception) {}
+                }
+                // کاربر اجازه را می‌دهد و دوباره «دانلود و نصب» را می‌زند
+                return
+            }
+            val fileName = "SahandService-update-v$version.apk"
+            val request = DownloadManager.Request(Uri.parse(apkUrl)).apply {
+                setTitle(getString(R.string.update_dl_title, version))
+                setDescription(getString(R.string.update_dl_desc))
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setDestinationInExternalFilesDir(this@MainActivity, Environment.DIRECTORY_DOWNLOADS, fileName)
+                val cookies = CookieManager.getInstance().getCookie(apkUrl)
+                if (cookies != null) addRequestHeader("cookie", cookies)
+                addRequestHeader("User-Agent", web.settings.userAgentString)
+            }
+            val id = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+            pendingApkDownloadId = id
+            Toast.makeText(this, R.string.update_dl_started, Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, getString(R.string.download_failed) + ": " + e.message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private var pendingApkDownloadId: Long = -1L
+
+    /** اجرای نصب APK پس از اتمام دانلود */
+    private fun installDownloadedApk(id: Long) {
+        try {
+            val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val q = DownloadManager.Query().setFilterById(id)
+            val c = dm.query(q)
+            if (c != null && c.moveToFirst()) {
+                val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                if (status != DownloadManager.STATUS_SUCCESSFUL) { c.close(); return }
+                val uri = android.net.Uri.parse(
+                    c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
+                )
+                c.close()
+                val file = if ("file" == uri.scheme) File(uri.path ?: return) else null
+                val contentUri = if (file != null)
+                    FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+                else uri
+                val i = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(contentUri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(i)
+            } else c?.close()
+        } catch (e: Exception) {
+            Toast.makeText(this, getString(R.string.update_install_failed) + ": " + e.message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** دریافت‌کنندهٔ اتمام دانلود — APK دانلودی را برای نصب باز می‌کند */
+    private val apkDownloadReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: -1L
+            if (id != -1L && id == pendingApkDownloadId) installDownloadedApk(id)
+        }
+    }
+
     // ── JS download hook (blob: + data: exports) ─────────────
 
     private fun injectDownloadHook() {
@@ -625,20 +790,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /* ── v2.10.0 (درخواست کاربر ۱۰) — ریشهٔ «ذخیره فایل ناموفق بود» ──
+     * وب‌پنل برای CSV/JSON مقدار mime مرکب می‌فرستد (مثل text/csv;charset=utf-8).
+     * MediaStore چنین مقداری را رد می‌کند/insert با null برمی‌گردد → ذخیره شکست
+     * می‌خورد در حالی که وب پیام «فایل خروجی ایجاد شد» داده بود.
+     * راه‌حل: پاک‌سازی mime (حذف پارامترها + اعتبارسنجی الگو) + تلاش مجدد با
+     * octet-stream + fallback نهایی به پوشهٔ اختصاصی اپ + نمایش دلیل خطا. */
+    private fun cleanMime(mime: String): String {
+        val m = (mime.substringBefore(';')).trim().lowercase(java.util.Locale.ROOT)
+        return if (Regex("^[-\\w.+]+/[-\\w.+]+$").matches(m) && m.length <= 127) m else "application/octet-stream"
+    }
+
     @Suppress("DEPRECATION")
     private fun saveDirectFile(name: String, mime: String, bytes: ByteArray) {
+        val cleanName = sanitize(name)
+        val cleanType = cleanMime(mime)
         try {
             if (Build.VERSION.SDK_INT >= 29) {
-                val values = android.content.ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, sanitize(name))
-                    put(MediaStore.Downloads.MIME_TYPE, if (mime.isBlank()) "application/octet-stream" else mime)
-                    put(MediaStore.Downloads.IS_PENDING, 1)
+                try {
+                    saveViaMediaStore(cleanName, cleanType, bytes)
+                } catch (e: Exception) {
+                    // تلاش مجدد با mime عمومی (برخی دستگاه‌ها به mime خاص حساس‌اند)
+                    try {
+                        saveViaMediaStore(cleanName, "application/octet-stream", bytes)
+                    } catch (e2: Exception) {
+                        // fallback نهایی: پوشهٔ اختصاصی اپ (بدون مجوز اضافه) + بازکردن/اشتراک
+                        saveToAppDownloads(cleanName, bytes)
+                    }
                 }
-                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return
-                contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
-                values.clear()
-                values.put(MediaStore.Downloads.IS_PENDING, 0)
-                contentResolver.update(uri, values, null, null)
             } else {
                 if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     != PackageManager.PERMISSION_GRANTED
@@ -649,16 +828,51 @@ class MainActivity : AppCompatActivity() {
                 }
                 val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                 if (!dir.exists()) dir.mkdirs()
-                FileOutputStream(File(dir, sanitize(name))).use { it.write(bytes) }
+                FileOutputStream(File(dir, cleanName)).use { it.write(bytes) }
+                Toast.makeText(this, getString(R.string.saved_to_downloads, cleanName), Toast.LENGTH_LONG).show()
             }
-            Toast.makeText(this, getString(R.string.saved_to_downloads, sanitize(name)), Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
-            Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.save_failed_reason, e.message ?: "?"), Toast.LENGTH_LONG).show()
         }
     }
 
+    /** v2.10.0 — ذخیرهٔ MediaStore (Android 10+) با پاکسازی mime و تضمین بستن IS_PENDING */
+    private fun saveViaMediaStore(name: String, mime: String, bytes: ByteArray) {
+        val values = android.content.ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, name)
+            put(MediaStore.Downloads.MIME_TYPE, mime)
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IllegalStateException("MediaStore insert null")
+        try {
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                ?: throw IllegalStateException("openOutputStream null")
+        } catch (e: Exception) {
+            // فایل ناقص — ردیف pending را حذف کنیم تا فایل خالی در Downloads نماند
+            try { contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+            throw e
+        }
+        values.clear()
+        values.put(MediaStore.Downloads.IS_PENDING, 0)
+        contentResolver.update(uri, values, null, null)
+        Toast.makeText(this, getString(R.string.saved_to_downloads, name), Toast.LENGTH_LONG).show()
+    }
+
+    /** v2.10.0 — fallback: پوشهٔ Downloads اختصاصی اپ + اعلان با مسیر فایل */
+    private fun saveToAppDownloads(name: String, bytes: ByteArray) {
+        val dir = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "exports")
+        if (!dir.exists()) dir.mkdirs()
+        val f = File(dir, name)
+        FileOutputStream(f).use { it.write(bytes) }
+        Toast.makeText(this, getString(R.string.saved_app_dir, name, dir.absolutePath), Toast.LENGTH_LONG).show()
+    }
+
     private fun sanitize(name: String): String {
-        return name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(120).ifEmpty { "sahand-file" }
+        return name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            .replace(Regex("[\\x00-\\x1f]"), "")
+            .trim()
+            .take(120).ifEmpty { "sahand-file" }
     }
 
     // ── State ─────────────────────────────────────────────────
@@ -688,11 +902,17 @@ class MainActivity : AppCompatActivity() {
         try { ensureFreshContent(periodic = true) } catch (_: Exception) {}
         versionCheckHandler.removeCallbacks(versionCheckTask)
         versionCheckHandler.postDelayed(versionCheckTask, 5 * 60 * 1000L)
+        // v2.10.0 (درخواست کاربر ۱۱) — اگر اعلان‌ها خاموش‌اند، هشدار فعال‌سازی
+        try { showNotificationWarningIfNeeded() } catch (_: Exception) {}
+        // v2.10.0 (درخواست کاربر ۸) — بررسی نسخهٔ جدید اپ پس از بازگشت
+        try { checkAppUpdate(forceDialog = false) } catch (_: Exception) {}
         // v2.9.6 — وب‌اپ خودش polling را برمی‌گرداند
         stopBackgroundNotifyPolling()
     }
 
     override fun onDestroy() {
+        // v2.10.0 — لغو ثبت دریافت‌کنندهٔ دانلود APK
+        try { unregisterReceiver(apkDownloadReceiver) } catch (_: Exception) {}
         if (::web.isInitialized) web.destroy()
         super.onDestroy()
     }
@@ -714,21 +934,78 @@ class MainActivity : AppCompatActivity() {
         nm.createNotificationChannel(ch)
     }
 
-    /** درخواست مجوز اعلان روی Android 13+ (یک‌بار در نخستین اجرا) */
+    /** درخواست مجوز اعلان روی Android 13+
+     *  v2.10.0 (درخواست کاربر ۱۱ — «نوتیفیکیشن‌های سیستمی از کار افتادند») —
+     *  قبلاً فقط «یک‌بار برای همیشه» پرسیده می‌شد؛ اگر کاربر رد می‌کرد یا دیالوگ
+     *  را نمی‌دید، nm.notify() در Android 13+ بی‌صدا رد می‌شد و هیچ اعلانی
+     *  دیگر نمایش داده نمی‌شد. اکنون: تا زمانی که مجوز داده نشده و رد قطعی
+     *  نشده، در هر اجرا دوباره پرسیده می‌شود + هشدار و میانبر تنظیمات. */
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < 33) return
         if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
             == PackageManager.PERMISSION_GRANTED
         ) return
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        if (prefs.getBoolean("notif_perm_asked", false)) return
-        prefs.edit().putBoolean("notif_perm_asked", true).apply()
+        val deniedForever = !shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS)
+                && prefs.getBoolean("notif_perm_denied_once", false)
+        if (deniedForever) return // رد قطعی — کاربر باید از تنظیمات فعال کند (کارت هشدار جدا نمایش داده می‌شود)
+        prefs.edit().putBoolean("notif_perm_denied_once", true).apply() // برای تشخیص ردِ قطعی در اجرای بعدی
         notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
 
-    /** نمایش اعلان سیستمی — id عددی از hash تگ برای به‌روزرسانی هم‌نوع‌ها */
+    /** v2.10.0 — وضعیت واقعی اعلان‌ها: مجوز + فعال بودن کانال */
+    private fun notificationsReallyEnabled(): Boolean {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (!nm.areNotificationsEnabled()) return false
+        if (Build.VERSION.SDK_INT >= 26) {
+            val ch = nm.getNotificationChannel(NOTIF_CHANNEL)
+            if (ch != null && ch.importance == NotificationManager.IMPORTANCE_NONE) return false
+        }
+        return true
+    }
+
+    /** v2.10.0 — بازکردن تنظیمات اعلان اپ (مجوز رد‌شدهٔ قطعی یا کانال خاموش) */
+    private fun openNotificationSettings() {
+        try {
+            val intent = Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
+            }
+            startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:$packageName")))
+            } catch (_: Exception) {}
+        }
+    }
+
+    /** v2.10.0 — هشدار روزانه (حداکثر) وقتی اعلان‌ها خاموش‌اند — با میانبر فعال‌سازی */
+    private fun showNotificationWarningIfNeeded() {
+        if (notificationsReallyEnabled()) return
+        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val today = android.text.format.DateFormat.format("yyyyMMdd", java.util.Date()).toString()
+        if (prefs.getString("notif_warn_day", "") == today) return
+        prefs.edit().putString("notif_warn_day", today).apply()
+        runOnUiThread {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.notif_off_title)
+                .setMessage(R.string.notif_off_msg)
+                .setPositiveButton(R.string.notif_open_settings) { _, _ -> openNotificationSettings() }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+        }
+    }
+
+    /** نمایش اعلان سیستمی — id عددی از hash تگ برای به‌روزرسانی هم‌نوع‌ها
+     *  v2.10.0 — پیش‌شرط واقعی اعلان‌ها بررسی می‌شود (مجوز + کانال) تا
+     *  notify() بی‌صدا شکست نخورد؛ در صورت خاموشی، هشدار درون‌اپی نمایش
+     *  داده می‌شود (حداکثر یک‌بار در روز) */
     private fun postSystemNotification(title: String, body: String, tag: String, url: String) {
         try {
+            if (!notificationsReallyEnabled()) {
+                showNotificationWarningIfNeeded()
+                return
+            }
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             createNotificationChannel()
             val intent = Intent(this, MainActivity::class.java).apply {

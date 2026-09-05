@@ -5,14 +5,16 @@ plugins {
 
 android {
     namespace = "com.sahandservice.app"
-    compileSdk = 34
+    // v2.10.0 (درخواست کاربر ۹ — Play Protect): target/compile 35 + امضای ثابت
+    // (کلید یکسان در همهٔ نسخه‌ها) اعتماد Play Protect را بالا می‌برد.
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.sahandservice.app"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 9
-        versionName = "2.9.10"
+        targetSdk = 35
+        versionCode = 10
+        versionName = "2.10.0"
     }
 
     signingConfigs {
@@ -67,6 +69,10 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+    }
+    // v2.10.0 — BuildConfig برای نسخهٔ فعلی و flavor در به‌روزرسانی خودکار
+    buildFeatures {
+        buildConfig = true
     }
 }
 

@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <external-files-path name="camera" path="camera/" />
+    <!-- v2.10.0 — APKهای آپدیت که DownloadManager در files/Download ذخیره می‌کند -->
+    <external-files-path name="downloads" path="Download/" />
     <files-path name="internal" path="." />
 </paths>
