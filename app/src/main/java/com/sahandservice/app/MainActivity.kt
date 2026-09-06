@@ -1,26 +1,28 @@
 package com.sahandservice.app
 
-import android.annotation.SuppressLint
-import android.app.Activity
+import android.Manifest
 import android.app.DownloadManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.provider.MediaStore
-import android.util.Base64
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
-import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
+import android.webkit.SslErrorHandler
+import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -29,109 +31,88 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ProgressBar
+import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.BufferedReader
 import java.io.File
-import java.io.FileOutputStream
+import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLDecoder
+import java.net.URLConnection
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.roundToInt
 
+/**
+ * MainActivity — اپ اندروید سهند سرویس (WebView پنل + قابلیت‌های بومی)
+ *
+ * v2.11.0 — بازسازی کامل سورس (نسخه‌های قبل فقط APK بودند) + اصلاحات:
+ *  • رفع «هیدر زیر نوار اعلان» (edge-to-edge اندروید ۱۵ → padding نوارها)
+ *  • اعلان‌های سیستمی مقاوم (درخواست مجوز پس از نخستین تعامل + هشدار + کانال HIGH)
+ *  • دیالوگ بروزرسانی با فهرست تغییرات اسکرول‌شونده (حداکثر ۶۰٪ صفحه)
+ *  • نصب خودکار بروزرسانی (android-app.json + DownloadManager + نصب‌کننده)
+ *  • ذخیرهٔ فایل‌های خروجی (blob / data-url / دانلود سیستمی / MediaStore)
+ */
 class MainActivity : AppCompatActivity() {
 
     companion object {
         const val PREFS = "sahand_prefs"
         const val KEY_URL = "server_url"
-        const val NOTIF_CHANNEL = "sahand_notifications" // v2.9.1
+        const val NOTIF_CHANNEL = "sahand_notifications"
+        const val APK_MIME = "application/vnd.android.package-archive"
     }
 
+    private var serverUrl: String = ""
     private lateinit var web: WebView
     private lateinit var progressBar: ProgressBar
-    private var serverUrl: String = ""
     private var pageError = false
 
+    // ── انتخاب فایل / دوربین ──
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var cameraPhotoUri: Uri? = null
-    private var pendingGeoOrigin: String? = null
-    private var pendingGeoCallback: GeolocationPermissions.Callback? = null
 
-    // ── Activity result launchers ─────────────────────────────
+    // ═══ v2.11.0 ═══
+    private var bgPollHandler: Handler? = null
+    private var bgPollRunnable: Runnable? = null
+    private var bgUserPanel: String? = null
+    private var bgTechId: String? = null
 
-    private val openFile = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
-        val cb = filePathCallback
-        filePathCallback = null
-        if (cb == null) return@registerForActivityResult
-        var result: Array<Uri>? = null
-        if (res.resultCode == Activity.RESULT_OK) {
-            val dataUri = res.data?.data
-            if (dataUri != null) {
-                result = arrayOf(dataUri)
-            } else {
-                val cam = cameraPhotoUri
-                if (cam != null) {
-                    try {
-                        contentResolver.openInputStream(cam)?.close()
-                        result = arrayOf(cam)
-                    } catch (_: Exception) {
-                    }
-                }
-            }
+    // ── بروزرسانی خودکار ──
+    private val versionCheckHandler = Handler(Looper.getMainLooper())
+    private val versionCheckTask = object : Runnable {
+        override fun run() {
+            try { checkAppUpdate(false) } catch (_: Exception) {}
+            versionCheckHandler.postDelayed(this, 6 * 60 * 60 * 1000L)
         }
-        cameraPhotoUri = null
-        cb.onReceiveValue(result)
     }
-
-    private val geoPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        val cb = pendingGeoCallback
-        val origin = pendingGeoOrigin
-        pendingGeoCallback = null
-        pendingGeoOrigin = null
-        cb?.invoke(origin ?: "", granted, false)
-    }
-
-    private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        val pending = pendingDownload
-        pendingDownload = null
-        if (granted && pending != null) saveDirectFile(pending.first, pending.second, pending.third)
-        else if (!granted) Toast.makeText(this, R.string.storage_denied, Toast.LENGTH_SHORT).show()
-    }
-
-    // v2.9.1 — نتیجهٔ درخواست مجوز نوتیفیکیشن (Android 13+)
-    private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        Toast.makeText(
-            this,
-            if (granted) R.string.notif_granted else R.string.notif_denied,
-            Toast.LENGTH_SHORT
-        ).show()
-    }
-
-    // v2.9.1 — نتیجهٔ درخواست مجوز میکروفون (ضبط پیام صوتی چت)
-    private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        val req = pendingAudioRequest
-        pendingAudioRequest = null
-        runOnUiThread {
-            if (granted) req?.grant(req.resources)
-            else req?.deny()
+    private var updateDialogShownFor = ""
+    private var pendingApkDownloadId = -1L
+    private val apkDownloadReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+            if (id == pendingApkDownloadId && pendingApkDownloadId > 0) installDownloadedApk(id)
         }
     }
 
-    private var pendingAudioRequest: PermissionRequest? = null
-
-    private var pendingDownload: Triple<String, String, ByteArray>? = null
-
-    // ── Lifecycle ─────────────────────────────────────────────
-
+    // ═════════════════════ onCreate ═════════════════════
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        serverUrl = prefs.getString(KEY_URL, "").orEmpty()
-
+        serverUrl = getSharedPreferences(PREFS, 0).getString(KEY_URL, "") ?: ""
         if (serverUrl.isEmpty()) {
             startActivity(Intent(this, SetupActivity::class.java))
             finish()
@@ -140,156 +121,115 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_main)
         setTheme(R.style.Theme_Sahand)
+
         web = findViewById(R.id.webview)
         progressBar = findViewById(R.id.progress)
 
-        // v2.9.1 — کانال اعلان + درخواست مجوز نوتیفیکیشن (Android 13+)
+        /* ═══ v2.11.0 — رفع باگ «هیدر زیر نوار اعلان» ═══
+         * روی targetSdk 35 (اندروید ۱۵) edge-to-edge اجباری است و رنگ
+         * statusBarColor نادیده گرفته می‌شود → محتوای WebView زیر نوار
+         * وضعیت/ناوبری می‌رود. padding نوارهای سیستمی + بریدگی نمایشگر
+         * روی نمای ریشه اعمال می‌شود تا هیدر پنل همیشه زیر نوار دیده شود. */
+        applySystemBarInsets()
+
         createNotificationChannel()
-        requestNotificationPermissionIfNeeded()
+        /* v2.11.0 — درخواست مجوز اعلان دیگر در onCreate (قبل از آماده شدن
+         * رابط) نیست؛ پس از ۲ ثانیه و در نخستین تعامل کاربر پرسیده می‌شود
+         * (روی برخی دستگاه‌ها دیالوگِ زودهنگام خودکار بسته می‌شد و کاربر
+         * بدون اطلاع رد کرده بود → «اعلان‌ها از کار افتاده بودند»). */
+        Handler(Looper.getMainLooper()).postDelayed({
+            requestNotificationPermissionIfNeeded(askIfNeverDenied = true)
+        }, 2000L)
 
-        setupWebView(savedInstanceState ?: intent.getBundleExtra("webState"))
+        // v2.11.0 — استیت WebView از intent (دیپ‌لینک نوتیف) هم قابل بازیابی است
+        val savedState = savedInstanceState ?: intent.getBundleExtra("webState")
+        setupWebView(savedState)
 
-        // v2.10.0 (درخواست کاربر ۸) — دریافت اتمام دانلودِ APK آپدیت
-        androidx.core.content.ContextCompat.registerReceiver(
+        ContextCompat.registerReceiver(
             this, apkDownloadReceiver,
-            android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+            ContextCompat.RECEIVER_NOT_EXPORTED
         )
-        // v2.10.0 — بررسی نسخهٔ جدید اپ در نخستین اجرا (دیالوگ فقط یک‌بار برای هر نسخه)
-        try { checkAppUpdate(forceDialog = false) } catch (_: Exception) {}
+
+        try { checkAppUpdate(false) } catch (_: Exception) {}
+        versionCheckHandler.postDelayed(versionCheckTask, 60 * 1000L)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (pageError) {
-                    showExitDialog()
-                    return
-                }
-                // v2.9.1 (درخواست کاربر) — منطق بازگشت به وب سپرده می‌شود:
-                //   window.__sahandBack() → "exit" (روی داشبورد است → کادر تأیید خروج)
-                //                        → "handled" (به داشبورد برگشت)
-                //   اگر پل وجود نداشت (خطا/صفحه قدیمی) → رفتار قبلی (goBack/خروج)
+                if (pageError) { showExitDialog(); return }
                 web.evaluateJavascript(
                     "(typeof window.__sahandBack === 'function') ? window.__sahandBack() : 'default'"
-                ) { result ->
-                    // v2.9.2 — رفع خطای کامپایل: زنجیرهٔ nullable-safe (?.trim()?.trim())
-                    val r = result?.trim()?.trim('"') ?: "default"
-                    when (r) {
-                        "exit" -> runOnUiThread { showExitDialog() }
-                        "handled" -> { /* وب خودش به داشبورد برگشت */ }
-                        else -> runOnUiThread {
-                            // fallback — رفتار قدیمی
-                            if (web.canGoBack()) web.goBack() else showExitDialog()
+                ) { raw ->
+                    val v = raw?.trim()?.trim('"') ?: "default"
+                    runOnUiThread {
+                        when (v) {
+                            "exit" -> showExitDialog()
+                            "handled" -> Unit
+                            else -> if (web.canGoBack()) web.goBack() else showExitDialog()
                         }
                     }
                 }
             }
         })
-    }
 
-    // ── v2.8.7 — تحویل تضمینی آپدیت‌های سرور به اپ ──
-    // WebView کش HTTP خودش را نگه می‌دارد؛ اگر سرور بروزرسانی شده باشد
-    // (version.json عوض شده) کش HTTP WebView خالی می‌شود تا فایل‌های استاتیک
-    // جدید (چانک‌ها/پچ‌ها) حتماً از سرور بیایند.
-    // v2.9.7 (گزارش کاربر: «پنل رو آپدیت کردم ولی هنوز نسخهٔ قدیمی را نشان
-    // می‌دهد»): (۱) علاوه بر پاک‌کردن کش، صفحه هم بارگذاری مجدد می‌شود —
-    // قبلاً فقط کش خالی می‌شد و صفحهٔ قدیمیِ در حافظه می‌ماند تا restart
-    // دستی؛ (۲) بررسی دوره‌ای هر ۵ دقیقه (نه فقط هنگام ساخت) — اپ‌های
-    // همیشه‌باز هرگز آپدیت سرور را نمی‌دیدند. یک‌بار در هر تغییر نسخه.
-    /** v2.9.10 — بارگذاری مجدد «بدون کش» (گزارش کاربر: «موارد جدیدی که به منو
-     * اضافه شده مثل گزارش‌گیری سفارشی و مابقی موارد جدید در اپلیکیشن وجود نداره»).
-     * ریشه: کش HTTP وب‌ویو (و نه SW) نسخهٔ کهنهٔ index.html/چانک‌ها را نگه می‌داشت —
-     * clearCache(true) async است و ممکن است قبل از reload تمام نشود. اکنون:
-     *   ۱) cacheMode = LOAD_NO_CACHE (فعال تا پایان بارگذاری)
-     *   ۲) clearCache(true)
-     *   ۳) reload بعد از ۳۰۰ms (فرصت پاک‌سازی)
-     *   ۴) پس از onPageFinished → بازگشت به LOAD_DEFAULT */
-    private fun reloadBypassingCache() {
-        try { web.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE } catch (_: Exception) {}
-        try { web.clearCache(true) } catch (_: Exception) {}
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            try { web.reload() } catch (_: Exception) {}
-        }, 300)
-    }
-
-    private fun ensureFreshContent(periodic: Boolean = false) {
-        try {
-            val verUrl = serverUrl.trimEnd('/') + "/version.json"
-            Thread {
-                try {
-                    val conn = URL(verUrl).openConnection() as HttpURLConnection
-                    conn.connectTimeout = 8000
-                    conn.readTimeout = 8000
-                    conn.setRequestProperty("User-Agent", web.settings.userAgentString)
-                    conn.setRequestProperty("Cache-Control", "no-cache")
-                    val body = conn.inputStream.bufferedReader().use { it.readText() }
-                    val serverVersion = org.json.JSONObject(body).optString("version", "")
-                    if (serverVersion.isEmpty()) return@Thread
-                    val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    val lastSeen = prefs.getString("last_server_version", null)
-                    if (lastSeen != null && lastSeen != serverVersion) {
-                        runOnUiThread {
-                            // v2.9.10 — بارگذاری مجدد بدون کش (منوهای جدید فوراً ظاهر می‌شوند)
-                            reloadBypassingCache()
-                        }
-                    }
-                    prefs.edit().putString("last_server_version", serverVersion).apply()
-                } catch (_: Exception) {
-                    // آفلاین/خطا — بی‌صدا
-                }
-            }.start()
-        } catch (_: Exception) {}
-    }
-
-    /** v2.9.7 — بررسی دوره‌ای نسخهٔ سرور (اپ‌های همیشه‌باز) */
-    private val versionCheckHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val versionCheckTask = object : Runnable {
-        override fun run() {
-            try { ensureFreshContent(periodic = true) } catch (_: Exception) {}
-            versionCheckHandler.postDelayed(this, 5 * 60 * 1000L)
+        // نخستین تعامل کاربر → درخواست مجوز اعلان (اگر هنوز داده نشده)
+        window.decorView.setOnTouchListener { _, _ ->
+            window.decorView.setOnTouchListener(null)
+            requestNotificationPermissionIfNeeded(askIfNeverDenied = true)
+            false
         }
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
+    /** v2.11.0 — padding نوارهای سیستمی (رفع فول‌اسکرین/هیدر زیر نوتیفیکیشن) */
+    private fun applySystemBarInsets() {
+        val root = findViewById<View>(R.id.root) ?: return
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
+        // آیکون‌های روشن نوار وضعیت روی زمینهٔ تیره
+        WindowInsetsControllerCompat(window, root).isAppearanceLightStatusBars = false
+        WindowInsetsControllerCompat(window, root).isAppearanceLightNavigationBars = false
+        window.statusBarColor = Color.parseColor("#0f172a")
+        window.navigationBarColor = Color.parseColor("#0f172a")
+    }
+
+    // ═════════════════════ WebView ═════════════════════
     private fun setupWebView(state: Bundle?) {
-        web.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            databaseEnabled = true
-            allowFileAccess = true
-            allowContentAccess = true
-            loadWithOverviewMode = true
-            useWideViewPort = true
-            mediaPlaybackRequiresUserGesture = false
-            // B-07: منع بارگذاری محتوای مخلوط — روی سرور https هیچ منبع http بارگذاری نمی‌شود
-            // (پس از خود-میزبانی فونت‌ها در وب v2.6.1+ هیچ وابستگی خارجی http باقی نمانده است)
-            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            userAgentString = "$userAgentString SahandAndroidApp/2.10.0"
-        }
+        val settings: WebSettings = web.settings
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true
+        settings.databaseEnabled = true
+        settings.allowFileAccess = true
+        settings.allowContentAccess = true
+        settings.loadWithOverviewMode = true
+        settings.useWideViewPort = true
+        settings.mediaPlaybackRequiresUserGesture = false
+        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        settings.userAgentString = settings.userAgentString + " SahandAndroidApp/2.11.1"
 
-        CookieManager.getInstance().apply {
-            setAcceptCookie(true)
-            setAcceptThirdPartyCookies(web, true)
-        }
-
-        // Service Worker (PWA) با رفتار پیش‌فرض WebView کار می‌کند — نیازی به تنظیم اضافه نیست
+        val cookieManager = CookieManager.getInstance()
+        cookieManager.setAcceptCookie(true)
+        cookieManager.setAcceptThirdPartyCookies(web, true)
 
         web.addJavascriptInterface(FileBridge(), "SahandFiles")
-        // v2.9.1 — پل اعلان‌های سیستمی: وب با SahandNative.showNotification اعلان
-        // سیستمی اندروید می‌فرستد (WebView از Notification API وب پشتیبانی نمی‌کند)
         web.addJavascriptInterface(NativeBridge(), "SahandNative")
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val url = request.url
-                val scheme = url.scheme ?: return false
-                if (scheme == "tel" || scheme == "mailto" || scheme == "sms" || scheme == "intent" || scheme == "whatsapp") {
-                    openExternal(url)
+                val uri = request.url
+                val scheme = uri.scheme ?: return false
+                if (scheme in listOf("whatsapp", "tel", "sms", "mailto", "intent")) {
+                    openExternal(uri)
                     return true
                 }
                 if (scheme == "http" || scheme == "https") {
-                    val host = url.host ?: return false
-                    if (host != Uri.parse(serverUrl).host) {
-                        openExternal(url)
+                    val host = uri.host ?: return false
+                    val serverHost = Uri.parse(serverUrl).host ?: return false
+                    if (host != serverHost) {
+                        openExternal(uri)
                         return true
                     }
                 }
@@ -299,9 +239,14 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
                 progressBar.visibility = View.GONE
-                // v2.9.10 — بازگشت حالت کش به پیش‌فرض پس از بارگذاری بدون کش
-                try { web.settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT } catch (_: Exception) {}
-                if (!pageError) injectDownloadHook()
+                try { web.settings.cacheMode = WebSettings.LOAD_DEFAULT } catch (_: Exception) {}
+                if (!pageError) {
+                    injectDownloadHook()
+                    // v2.11.0 — poll اعلان‌ها با هر بارگذاری صفحه تازه می‌شود
+                    startBackgroundNotifyPolling()
+                    // v2.11.1 — ثبت دستگاه در سرور لایسنس (مدیریت لایسنس ← دستگاه‌ها)
+                    sendAppHeartbeatIfNeeded()
+                }
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -309,11 +254,11 @@ class MainActivity : AppCompatActivity() {
                 if (request.isForMainFrame) {
                     pageError = true
                     progressBar.visibility = View.GONE
-                    web.loadUrl("file:///android_asset/error.html?u=${Uri.encode(serverUrl)}")
+                    web.loadUrl("file:///android_asset/error.html?u=" + Uri.encode(serverUrl))
                 }
             }
 
-            override fun onReceivedSslError(view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
+            override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: android.net.http.SslError) {
                 handler.cancel()
                 Toast.makeText(this@MainActivity, R.string.ssl_blocked, Toast.LENGTH_LONG).show()
             }
@@ -321,71 +266,38 @@ class MainActivity : AppCompatActivity() {
 
         web.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView, newProgress: Int) {
+                progressBar.visibility = if (newProgress >= 100) View.GONE else View.VISIBLE
                 progressBar.progress = newProgress
-                progressBar.visibility = if (newProgress < 100) View.VISIBLE else View.GONE
             }
 
-            override fun onShowFileChooser(
-                webView: WebView,
-                callback: ValueCallback<Array<Uri>>,
-                params: FileChooserParams
-            ): Boolean {
-                filePathCallback?.onReceiveValue(null)
-                filePathCallback = callback
-
-                val gallery = Intent(Intent.ACTION_GET_CONTENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "*/*"
-                    val types = params.acceptTypes?.filterNotNull()?.filter { it.isNotBlank() }?.toTypedArray()
-                    if (!types.isNullOrEmpty()) putExtra(Intent.EXTRA_MIME_TYPES, types)
-                }
-
-                val camera = createCameraIntent()
-
-                val chooser = Intent.createChooser(gallery, getString(R.string.choose_file)).apply {
-                    if (camera != null) putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(camera))
-                }
-                return try {
-                    openFile.launch(chooser)
-                    true
-                } catch (_: ActivityNotFoundException) {
-                    filePathCallback = null
-                    false
-                }
-            }
-
-            override fun onGeolocationPermissionsShowPrompt(
-                origin: String,
-                callback: GeolocationPermissions.Callback
-            ) {
-                if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
-                    == PackageManager.PERMISSION_GRANTED
-                ) {
-                    callback.invoke(origin, true, false)
-                } else {
-                    pendingGeoOrigin = origin
-                    pendingGeoCallback = callback
-                    geoPermission.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
-                }
+            override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
+                callback.invoke(origin, true, false)
             }
 
             override fun onPermissionRequest(request: PermissionRequest) {
-                runOnUiThread {
-                    val res = request.resources ?: return@runOnUiThread
-                    // v2.9.1 — درخواست میکروفون از وب (ضبط پیام صوتی چت) →
-                    // مجوز اندرویدی RECORD_AUDIO هم تضمین می‌شود
-                    val needsAudio = res.any { it == "android.webkit.resource.AUDIO_CAPTURE" }
-                    if (needsAudio &&
-                        Build.VERSION.SDK_INT >= 23 &&
-                        checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
-                            != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        pendingAudioRequest = request
-                        micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
-                    } else {
-                        request.grant(res)
+                val res = request.resources
+                if (res.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) {
+                    runOnUiThread {
+                        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                            request.grant(res)
+                        } else {
+                            pendingAudioRequest = request
+                            micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        }
                     }
+                } else {
+                    request.deny()
                 }
+            }
+
+            override fun onShowFileChooser(
+                webView: WebView, filePathCallback: ValueCallback<Array<Uri>>,
+                fileChooserParams: FileChooserParams
+            ): Boolean {
+                this@MainActivity.filePathCallback?.onReceiveValue(null)
+                this@MainActivity.filePathCallback = filePathCallback
+                openFileChooser()
+                return true
             }
         }
 
@@ -393,601 +305,434 @@ class MainActivity : AppCompatActivity() {
             handleSystemDownload(url, contentDisposition, mimeType)
         }
 
-        // v2.8.7 — قبل از بارگذاری: اگر سرور بروزرسانی شده، کش HTTP خالی شود
-        ensureFreshContent()
-        if (state != null) web.restoreState(state) else web.loadUrl(serverUrl)
+        ensureFreshContent(periodic = false)
+
+        if (state != null) web.restoreState(state)
+        else web.loadUrl(serverUrl)
     }
 
-    // ── Downloads ─────────────────────────────────────────────
-
-    private fun handleSystemDownload(url: String, contentDisposition: String?, mimeType: String?) {
+    // ═════════════════════ فایل انتخابی / دوربین ═════════════════════
+    private fun openFileChooser() {
+        val intent = Intent(Intent.ACTION_GET_CONTENT)
+        intent.addCategory(Intent.CATEGORY_OPENABLE)
+        intent.type = "*/*"
+        // دوربین
+        val camera = createCameraIntent()
+        val chooser = Intent.createChooser(intent, getString(R.string.choose_file))
+        if (camera != null) chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(camera))
         try {
-            // v2.9.6 — blob:/data: از مسیر JS hook می‌آیند؛ اگر تا اینجا رسیده
-            // یعنی هوک نداد (مثلاً window.open) → مستقیم از صفحه/رشته بخوان و ذخیره کن
-            if (url.startsWith("blob:")) {
-                runOnUiThread { saveBlobFromWebView(url, contentDisposition, mimeType) }
-                return
-            }
-            if (url.startsWith("data:")) {
-                saveDataUrlDirect(url)
-                return
-            }
-            val request = DownloadManager.Request(Uri.parse(url)).apply {
-                val cookies = CookieManager.getInstance().getCookie(url)
-                if (cookies != null) addRequestHeader("cookie", cookies)
-                addRequestHeader("User-Agent", web.settings.userAgentString)
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                val name = URLDecoder.decode(
-                    try {
-                        URLUtilGuessFileName(url, contentDisposition, mimeType)
-                    } catch (_: Exception) {
-                        "sahand-download"
-                    }, "UTF-8"
-                )
-                setTitle(name)
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
-            }
-            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-            Toast.makeText(this, R.string.download_started, Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, getString(R.string.download_failed) + ": " + e.message, Toast.LENGTH_SHORT).show()
+            fileChooserLauncher.launch(chooser)
+        } catch (_: ActivityNotFoundException) {
+            filePathCallback?.onReceiveValue(null)
+            filePathCallback = null
         }
     }
 
-    private fun URLUtilGuessFileName(url: String, contentDisposition: String?, mimeType: String?): String {
-        return android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
-    }
-
-    /** v2.9.6 — ذخیرهٔ blob: با خواندن از Blob ثبت‌شده در صفحه (Promise → evaluateJavascript) */
-    private fun saveBlobFromWebView(blobUrl: String, contentDisposition: String?, mimeType: String?) {
-        try {
-            val fallbackName = URLDecoder.decode(
-                try {
-                    URLUtilGuessFileName(blobUrl, contentDisposition, mimeType)
-                } catch (_: Exception) {
-                    "sahand-download"
-                }, "UTF-8"
-            )
-            val js = "(function(){try{var b=window.__sahandBlobs&&window.__sahandBlobs['" + blobUrl +
-                "'];if(!b)return null;return new Promise(function(res){var r=new FileReader;" +
-                "r.onloadend=function(){res(JSON.stringify({mime:b.type||'application/octet-stream',b64:String(r.result).split(',')[1]||''}))};" +
-                "r.onerror=function(){res(null)};r.readAsDataURL(b)})}catch(e){return null}})()"
-            web.evaluateJavascript(js) { result ->
-                runOnUiThread {
-                    try {
-                        if (result == null || result == "null" || result.length < 10) {
-                            Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show()
-                            return@runOnUiThread
-                        }
-                        val obj = org.json.JSONObject(result)
-                        val mime = obj.optString("mime", "application/octet-stream").ifBlank { "application/octet-stream" }
-                        val b64 = obj.optString("b64", "")
-                        if (b64.isBlank()) {
-                            Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show()
-                            return@runOnUiThread
-                        }
-                        saveDirectFile(fallbackName, mime, Base64.decode(b64, Base64.DEFAULT))
-                    } catch (_: Exception) {
-                        Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show()
-                    }
-                }
+    private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val cb = filePathCallback
+        filePathCallback = null
+        var uris: Array<Uri>? = null
+        if (result.resultCode == RESULT_OK) {
+            val data = result.data
+            if (data?.data != null) uris = arrayOf(data.data!!)
+            else if (data?.clipData != null) {
+                val n = data.clipData!!.itemCount
+                uris = Array(n) { data.clipData!!.getItemAt(it).uri }
             }
-        } catch (e: Exception) {
-            Toast.makeText(this, getString(R.string.download_failed) + ": " + e.message, Toast.LENGTH_SHORT).show()
         }
+        cb?.onReceiveValue(uris ?: arrayOf())
     }
 
-    /** v2.9.6 — ذخیرهٔ مستقیم data: URL (بدون جاوااسکریپت) */
-    private fun saveDataUrlDirect(dataUrl: String) {
-        try {
-            val commaIdx = dataUrl.indexOf(',')
-            if (commaIdx < 0) return
-            val header = dataUrl.substring(5, commaIdx) // after "data:"
-            val mime = if (header.endsWith(";base64")) header.removeSuffix(";base64")
-                .ifEmpty { "application/octet-stream" } else "text/plain"
-            val b64 = dataUrl.substring(commaIdx + 1)
-            val bytes = if (header.endsWith(";base64"))
-                Base64.decode(b64, Base64.DEFAULT)
-            else b64.toByteArray(Charsets.UTF_8)
-            val name = "sahand-" + System.currentTimeMillis() + guessExtFromMime(mime)
-            runOnUiThread { saveDirectFile(name, mime, bytes) }
-        } catch (_: Exception) {
-            runOnUiThread { Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show() }
-        }
-    }
-
-    private fun guessExtFromMime(mime: String): String {
-        return when {
-            mime.startsWith("image/png") -> ".png"
-            mime.startsWith("image/jpeg") -> ".jpg"
-            mime.startsWith("image/webp") -> ".webp"
-            mime.startsWith("image/gif") -> ".gif"
-            mime.startsWith("text/csv") || mime == "text/comma-separated-values" -> ".csv"
-            mime.contains("json") -> ".json"
-            mime.startsWith("text/") -> ".txt"
-            mime.startsWith("application/zip") -> ".zip"
-            mime.contains("pdf") -> ".pdf"
-            mime.startsWith("audio/") -> ".webm"
-            else -> ".bin"
-        }
-    }
+    private var pendingAudioRequest: PermissionRequest? = null
 
     private fun createCameraIntent(): Intent? {
         return try {
-            val dir = File(getExternalFilesDir(null), "camera")
+            val dir = File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "camera")
             if (!dir.exists()) dir.mkdirs()
-            val file = File(dir, "photo_${System.currentTimeMillis()}.jpg")
-            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val photo = File(dir, "photo_" + System.currentTimeMillis() + ".jpg")
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", photo)
             cameraPhotoUri = uri
-            Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
-                putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                putExtra(android.provider.MediaStore.EXTRA_OUTPUT, uri)
                 addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-        } catch (_: Exception) {
-            null
-        }
+        } catch (_: Exception) { null }
     }
 
-    private fun openExternal(uri: Uri) {
+    // ═════════════════════ ذخیرهٔ فایل (blob / data-url / دانلود سیستمی) ═════════════════════
+    /** JS inject — لینک‌های a[download] با blob:/data: را به FileBridge می‌فرستد */
+    private fun injectDownloadHook() {
+        web.evaluateJavascript("""(function(){
+  if (window.__sahandDlHooked) return; window.__sahandDlHooked = true;
+  try {
+    var origCreate = URL.createObjectURL.bind(URL);
+    window.__sahandBlobs = {};
+    URL.createObjectURL = function(blob){
+      var u = origCreate(blob);
+      try { window.__sahandBlobs[u] = blob; } catch(e){}
+      return u;
+    };
+    document.addEventListener('click', function(e){
+      var a = e.target && e.target.closest ? e.target.closest('a[download]') : null;
+      if (!a) return;
+      var href = a.href || '';
+      try {
+        if (href.indexOf('blob:') === 0) {
+          var blob = window.__sahandBlobs[href];
+          if (blob) {
+            e.preventDefault(); e.stopPropagation();
+            var name = a.getAttribute('download') || 'sahand-export.bin';
+            var reader = new FileReader();
+            reader.onloadend = function(){
+              var b64 = String(reader.result).split(',')[1] || '';
+              SahandFiles.saveBase64(name, blob.type || 'application/octet-stream', b64);
+            };
+            reader.readAsDataURL(blob);
+          }
+        } else if (href.indexOf('data:') === 0) {
+          e.preventDefault(); e.stopPropagation();
+          var dn = a.getAttribute('download') || 'sahand-export.bin';
+          SahandFiles.saveDataUrl(dn, href);
+        }
+      } catch(err){}
+    }, true);
+  } catch(e){}
+})();""", null)
+    }
+
+    private fun saveBlobFromWebView(blobUrl: String, contentDisposition: String, mimeType: String) {
+        web.evaluateJavascript(
+            "(function(){var b=window.__sahandBlobs&&window.__sahandBlobs['$blobUrl'];if(!b)return null;var r=new FileReader();r.onloadend=function(){SahandFiles.saveBase64('${blobUrl.substringAfterLast("/")}',b.type||'application/octet-stream',String(r.result).split(',')[1]||'')};r.readAsDataURL(b);return 'ok'})()"
+        ) { }
+        // fallback: اگر blob register نشده بود، از path سیستمی
+        handleSystemDownload(blobUrl, contentDisposition, mimeType)
+    }
+
+    private fun saveDataUrlDirect(dataUrl: String) {
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, uri))
-        } catch (_: ActivityNotFoundException) {
-            Toast.makeText(this, R.string.no_app, Toast.LENGTH_SHORT).show()
+            val comma = dataUrl.indexOf(',')
+            if (comma < 0) return
+            var mime = dataUrl.substring(5, comma)
+            val isBase64 = mime.endsWith(";base64")
+            if (isBase64) mime = mime.removeSuffix(";base64")
+            if (mime.isEmpty()) mime = "application/octet-stream"
+            val data = dataUrl.substring(comma + 1)
+            val bytes = if (isBase64) android.util.Base64.decode(data, android.util.Base64.DEFAULT)
+            else data.toByteArray(Charsets.UTF_8)
+            saveDirectFile("sahand-export-${System.currentTimeMillis()}", mime, bytes)
+        } catch (e: Exception) {
+            Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun openConnection(urlStr: String, method: String): HttpURLConnection {
-        val conn = URL(urlStr).openConnection() as HttpURLConnection
-        conn.requestMethod = method
-        conn.connectTimeout = 15000
-        conn.readTimeout = 15000
-        val cookies = CookieManager.getInstance().getCookie(serverUrl)
-        if (cookies != null) conn.setRequestProperty("Cookie", cookies)
-        conn.setRequestProperty("User-Agent", web.settings.userAgentString)
-        return conn
+    private fun guessExtFromMime(mime: String): String = when {
+        mime.contains("pdf") -> "pdf"
+        mime.contains("csv") || mime.contains("excel") || mime.contains("spreadsheet") -> "csv"
+        mime.contains("json") -> "json"
+        mime.contains("zip") -> "zip"
+        mime.contains("png") -> "png"
+        mime.contains("jpeg") || mime.contains("jpg") -> "jpg"
+        mime.contains("svg") -> "svg"
+        mime.contains("html") -> "html"
+        else -> "bin"
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // v2.10.0 (درخواست کاربر ۸) — به‌روزرسانی خودکار اپ
-    // «اپلیکیشن اندروید بصورت اتوماتیک نسخه جدیدش رو چک بکنه و اگه نسخه
-    //  جدید بود با تایید کاربر خودش اتوماتیک دانلود بکنه و نصب بکنه»
-    // منبع: {serverUrl}/android-app.json روی پنل خود کاربر (فایل + APKها با
-    // بستهٔ آپدیت پنل نصب می‌شوند — بدون وابستگی به سایت بیرونی/فیلتر) و در
-    // صورت نبود آن، ریلز GitHub به‌عنوان fallback.
-    // جریان: نسخه > versionCode فعلی → دیالوگ «تغییرات نسخه» (قابل اسکرول —
-    // درخواست کاربر ۱۲) → تأیید → DownloadManager → نصب با
-    // REQUEST_INSTALL_PACKAGES + FileProvider.
-    // ═══════════════════════════════════════════════════════════
+    private fun cleanMime(mime: String): String {
+        val m = mime.substringBefore(';').trim().lowercase(Locale.ROOT)
+        return if (!Regex("^[-\\w.+]+/[-\\w.+]+$").matches(m) || m.length > 127) "application/octet-stream" else m
+    }
 
-    private var updateDialogShownFor: String = ""
+    private fun sanitize(name: String): String {
+        val clean = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
+        return if (clean.isEmpty() || clean == "." || clean == "..") "sahand-export.bin" else clean.take(80)
+    }
 
+    /** ذخیرهٔ مستقیم بایت‌ها — MediaStore (اندروید ۱۰+) یا پوشهٔ Downloads */
+    fun saveDirectFile(name: String, mime: String, bytes: ByteArray) {
+        try {
+            val nm = sanitize(name)
+            val m = cleanMime(mime)
+            // نام فایل با پسوند درست
+            val ext = guessExtFromMime(m)
+            val fileName = if (nm.contains('.')) nm else "$nm.$ext"
+            if (Build.VERSION.SDK_INT >= 29) {
+                saveViaMediaStore(fileName, m, bytes)
+            } else {
+                saveToAppDownloads(fileName, bytes)
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun saveViaMediaStore(name: String, mime: String, bytes: ByteArray) {
+        try {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.Downloads.MIME_TYPE, mime)
+                put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw Exception("insert failed")
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: throw Exception("stream failed")
+            values.clear()
+            values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+            Toast.makeText(this, getString(R.string.saved_to_downloads, name), Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            saveToAppDownloads(name, bytes)
+        }
+    }
+
+    private fun saveToAppDownloads(name: String, bytes: ByteArray) {
+        try {
+            val dir = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "exports").apply { if (!exists()) mkdirs() }
+            val f = File(dir, name)
+            f.writeBytes(bytes)
+            Toast.makeText(this, getString(R.string.saved_to_downloads, "$name (اپ)"), Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** دانلود سیستمی (لینک‌های http/https غیر-blob) */
+    private fun handleSystemDownload(url: String, contentDisposition: String, mimeType: String) {
+        Thread {
+            try {
+                val guess = URLUtil.guessFileName(url, contentDisposition, cleanMime(mimeType))
+                runOnUiThread {
+                    try {
+                        val req = DownloadManager.Request(Uri.parse(url))
+                        req.setMimeType(cleanMime(mimeType))
+                        req.setTitle(guess)
+                        req.setDescription(getString(R.string.download_started))
+                        req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                        req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, sanitize(guess))
+                        CookieManager.getInstance().getCookie(url)?.let { req.addRequestHeader("cookie", it) }
+                        req.addRequestHeader("User-Agent", web.settings.userAgentString)
+                        val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+                        dm.enqueue(req)
+                        Toast.makeText(this, R.string.download_started, Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        openExternal(Uri.parse(url))
+                    }
+                }
+            } catch (_: Exception) {}
+        }.start()
+    }
+
+    // ═════════════════════ بروزرسانی خودکار ═════════════════════
     private fun checkAppUpdate(forceDialog: Boolean) {
-        try {
-            val url = serverUrl.trimEnd('/') + "/android-app.json"
-            Thread {
-                try {
-                    val conn = openConnection(url, "GET")
-                    conn.setRequestProperty("Cache-Control", "no-cache")
-                    val body = if (conn.responseCode in 200..299)
-                        conn.inputStream.bufferedReader().use { it.readText() } else null
-                    conn.disconnect()
-                    if (body.isNullOrBlank()) return@Thread
-                    val o = org.json.JSONObject(body)
-                    val newVersion = o.optString("version", "")
-                    val newCode = o.optInt("versionCode", 0)
-                    if (newVersion.isEmpty() || newCode <= BuildConfig.VERSION_CODE) return@Thread
-                    if (!forceDialog && updateDialogShownFor == newVersion) return@Thread
-                    updateDialogShownFor = newVersion
-
+        Thread {
+            try {
+                val updateUrl = serverUrl.trimEnd('/') + "/android-app.json"
+                val conn = URL(updateUrl).openConnection() as HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                conn.setRequestProperty("Cache-Control", "no-cache")
+                val body = conn.inputStream.use { ins ->
+                    BufferedReader(InputStreamReader(ins, Charsets.UTF_8)).use { it.readText() }
+                }
+                conn.disconnect()
+                val obj = JSONObject(body)
+                val newCode = obj.optInt("versionCode", 0)
+                val currentCode = packageManager.getPackageInfo(packageName, 0).let {
+                    if (Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt() else @Suppress("DEPRECATION") it.versionCode
+                }
+                if (newCode > currentCode) {
+                    val version = obj.optString("version", "")
                     val notes = ArrayList<String>()
-                    val arr = o.optJSONArray("notes")
-                    if (arr != null) for (i in 0 until arr.length()) notes.add(arr.optString(i, ""))
-                    val apkField = if (BuildConfig.FLAVOR == "tech") "techApk" else "agencyApk"
-                    var apkUrl = o.optString(apkField, "")
-                    if (apkUrl.isNotEmpty() && apkUrl.startsWith("/"))
-                        apkUrl = serverUrl.trimEnd('/') + apkUrl
-                    if (apkUrl.isEmpty()) apkUrl = o.optString("apk", "")
-
-                    runOnUiThread { showUpdateDialog(newVersion, newCode, notes, apkUrl) }
-                } catch (_: Exception) { /* بی‌صدا */ }
-            }.start()
-        } catch (_: Exception) {}
+                    obj.optJSONArray("notes")?.let { arr: JSONArray ->
+                        for (i in 0 until arr.length()) {
+                            val n = arr.optString(i, "")
+                            if (n.isNotBlank()) notes.add(n)
+                        }
+                    }
+                    // APK مناسب همین flavor: agencyApk / techApk
+                    val isTech = packageName.endsWith(".tech")
+                    val apkUrl = obj.optString(if (isTech) "techApk" else "agencyApk", "")
+                    runOnUiThread {
+                        if (forceDialog || updateDialogShownFor != version) {
+                            updateDialogShownFor = version
+                            showUpdateDialog(version, newCode, notes, apkUrl)
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }.start()
     }
 
-    /** دیالوگ «تغییرات نسخه» — بدنهٔ اسکرول‌شونده (درخواست کاربر ۱۲) */
-    private fun showUpdateDialog(version: String, code: Int, notes: ArrayList<String>, apkUrl: String) {
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val scroll = android.widget.ScrollView(this)
+    /** v2.11.0 — دیالوگ بروزرسانی با فهرست تغییرات اسکرول‌شونده (رفع باگ «غیرقابل اسکرول») */
+    private fun showUpdateDialog(version: String, @Suppress("UNUSED_PARAMETER") code: Int, notes: ArrayList<String>, apkUrl: String) {
+        val dp16 = (16 * resources.displayMetrics.density).roundToInt()
+        val scroll = ScrollView(this)
         scroll.isVerticalScrollBarEnabled = true
-        val txt = android.widget.TextView(this)
-        txt.text = buildString {
-            append(getString(R.string.update_current, BuildConfig.VERSION_NAME))
-            append("\n")
-            append(getString(R.string.update_new, version))
-            append("\n\n")
-            if (notes.isEmpty()) append("—")
-            else notes.filter { it.isNotBlank() }.forEachIndexed { i, n -> append("• $n\n") }
+        val tv = TextView(this)
+        val sb = StringBuilder()
+        sb.append(getString(R.string.update_current, packageManager.getPackageInfo(packageName, 0).versionName)).append("\n")
+        sb.append(getString(R.string.update_new, version)).append("\n\n")
+        if (notes.isEmpty()) sb.append("—")
+        else notes.filter { it.isNotBlank() }.forEach { sb.append("• ").append(it).append("\n") }
+        tv.text = sb.toString()
+        tv.setPadding(dp16, dp16 / 2, dp16, dp16 / 2)
+        tv.textSize = 14f
+        tv.setTextColor(0xffe2e8f0.toInt())
+        // v2.11.0 — ارتفاع حداکثر ۶۰٪ صفحه → همیشه اسکرول‌شونده
+        scroll.addView(tv)
+        scroll.layoutParams = android.view.ViewGroup.LayoutParams(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        scroll.viewTreeObserver.addOnGlobalLayoutListener {
+            val maxH = (resources.displayMetrics.heightPixels * 0.6).toInt()
+            if (scroll.height > maxH) {
+                scroll.layoutParams.height = maxH
+                scroll.requestLayout()
+            }
         }
-        txt.setPadding(pad, pad / 2, pad, pad / 2)
-        txt.textSize = 14f
-        scroll.addView(txt)
-
-        AlertDialog.Builder(this)
-            .setTitle(R.string.update_title)
+        AlertDialog.Builder(this, R.style.Theme_Sahand_Dialog)
+            .setTitle(getString(R.string.update_title))
             .setView(scroll)
             .setPositiveButton(R.string.update_download) { _, _ -> downloadAndInstallUpdate(apkUrl, version) }
             .setNeutralButton(R.string.update_later, null)
             .show()
     }
 
-    /** دانلود APK با DownloadManager و سپس اجرای نصب‌کنندهٔ اندروید */
     private fun downloadAndInstallUpdate(apkUrl: String, version: String) {
         try {
             if (apkUrl.isEmpty()) {
                 Toast.makeText(this, R.string.update_no_url, Toast.LENGTH_LONG).show()
                 return
             }
-            // Android 8+ — اجازهٔ «نصب از منابع ناشناس» برای خودِ اپ
-            if (Build.VERSION.SDK_INT >= 26 &&
-                !packageManager.canRequestPackageInstalls()
-            ) {
+            if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
                 Toast.makeText(this, R.string.update_allow_install, Toast.LENGTH_LONG).show()
                 try {
-                    startActivity(
-                        Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                            Uri.parse("package:$packageName"))
-                    )
+                    startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
                 } catch (_: Exception) {
                     try {
-                        startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                            Uri.parse("package:$packageName")))
+                        startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
                     } catch (_: Exception) {}
                 }
-                // کاربر اجازه را می‌دهد و دوباره «دانلود و نصب» را می‌زند
                 return
             }
-            val fileName = "SahandService-update-v$version.apk"
-            val request = DownloadManager.Request(Uri.parse(apkUrl)).apply {
-                setTitle(getString(R.string.update_dl_title, version))
-                setDescription(getString(R.string.update_dl_desc))
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                setDestinationInExternalFilesDir(this@MainActivity, Environment.DIRECTORY_DOWNLOADS, fileName)
-                val cookies = CookieManager.getInstance().getCookie(apkUrl)
-                if (cookies != null) addRequestHeader("cookie", cookies)
-                addRequestHeader("User-Agent", web.settings.userAgentString)
-            }
-            val id = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-            pendingApkDownloadId = id
+            // آدرس نسبی → کامل با سرور
+            val fullUrl = if (apkUrl.startsWith("http")) apkUrl else serverUrl.trimEnd('/') + apkUrl
+            val req = DownloadManager.Request(Uri.parse(fullUrl))
+            req.setTitle(getString(R.string.update_dl_title, version))
+            req.setDescription(getString(R.string.update_dl_desc))
+            req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            req.setMimeType(APK_MIME)
+            req.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, "SahandService-update-v$version.apk")
+            CookieManager.getInstance().getCookie(fullUrl)?.let { req.addRequestHeader("cookie", it) }
+            req.addRequestHeader("User-Agent", web.settings.userAgentString)
+            val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+            pendingApkDownloadId = dm.enqueue(req)
             Toast.makeText(this, R.string.update_dl_started, Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, getString(R.string.download_failed) + ": " + e.message, Toast.LENGTH_LONG).show()
         }
     }
 
-    private var pendingApkDownloadId: Long = -1L
-
-    /** اجرای نصب APK پس از اتمام دانلود */
-    private fun installDownloadedApk(id: Long) {
+    fun installDownloadedApk(id: Long) {
         try {
-            val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val q = DownloadManager.Query().setFilterById(id)
-            val c = dm.query(q)
-            if (c != null && c.moveToFirst()) {
-                val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                if (status != DownloadManager.STATUS_SUCCESSFUL) { c.close(); return }
-                val uri = android.net.Uri.parse(
-                    c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
-                )
-                c.close()
-                val file = if ("file" == uri.scheme) File(uri.path ?: return) else null
-                val contentUri = if (file != null)
-                    FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-                else uri
-                val i = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(contentUri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(i)
-            } else c?.close()
+            val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+            val cursor = dm.query(DownloadManager.Query().setFilterById(id))
+            if (cursor == null || !cursor.moveToFirst()) { cursor?.close(); return }
+            if (cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) != DownloadManager.STATUS_SUCCESSFUL) {
+                cursor.close(); return
+            }
+            var uri = Uri.parse(cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI)))
+            cursor.close()
+            var file: File? = null
+            if (uri.scheme == "file") {
+                uri.path?.let { file = File(it) }
+            } else if (uri.scheme == "content") {
+                // v2.11.0 — external-files در اندروید ۱۰+ content URI برمی‌گرداند
+                try {
+                    val rel = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                    if (rel != null) {
+                        val f = File(rel, uri.lastPathSegment?.substringAfterLast('/') ?: "")
+                        if (f.exists()) file = f
+                    }
+                } catch (_: Exception) {}
+            }
+            val apkUri = if (file != null) FileProvider.getUriForFile(this, "$packageName.fileprovider", file!!) else uri
+            val intent = Intent(Intent.ACTION_VIEW)
+            intent.setDataAndType(apkUri, APK_MIME)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
         } catch (e: Exception) {
             Toast.makeText(this, getString(R.string.update_install_failed) + ": " + e.message, Toast.LENGTH_LONG).show()
         }
     }
 
-    /** دریافت‌کنندهٔ اتمام دانلود — APK دانلودی را برای نصب باز می‌کند */
-    private val apkDownloadReceiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: -1L
-            if (id != -1L && id == pendingApkDownloadId) installDownloadedApk(id)
-        }
-    }
-
-    // ── JS download hook (blob: + data: exports) ─────────────
-
-    private fun injectDownloadHook() {
-        val js = """
-        (function(){
-          if (window.__sahandDlHooked) return; window.__sahandDlHooked = true;
-          try {
-            var origCreate = URL.createObjectURL.bind(URL);
-            window.__sahandBlobs = {};
-            URL.createObjectURL = function(blob){
-              var u = origCreate(blob);
-              try { window.__sahandBlobs[u] = blob; } catch(e){}
-              return u;
-            };
-            document.addEventListener('click', function(e){
-              var a = e.target && e.target.closest ? e.target.closest('a[download]') : null;
-              if (!a) return;
-              var href = a.href || '';
-              try {
-                if (href.indexOf('blob:') === 0) {
-                  var blob = window.__sahandBlobs[href];
-                  if (blob) {
-                    e.preventDefault(); e.stopPropagation();
-                    var name = a.getAttribute('download') || 'sahand-export.bin';
-                    var reader = new FileReader();
-                    reader.onloadend = function(){
-                      var b64 = String(reader.result).split(',')[1] || '';
-                      SahandFiles.saveBase64(name, blob.type || 'application/octet-stream', b64);
-                    };
-                    reader.readAsDataURL(blob);
-                  }
-                } else if (href.indexOf('data:') === 0) {
-                  e.preventDefault(); e.stopPropagation();
-                  var dn = a.getAttribute('download') || 'sahand-export.bin';
-                  SahandFiles.saveDataUrl(dn, href);
-                }
-              } catch(err){}
-            }, true);
-          } catch(e){}
-        })();
-        """.trimIndent()
-        web.evaluateJavascript(js, null)
-    }
-
-    inner class FileBridge {
-        @JavascriptInterface
-        fun saveBase64(name: String, mime: String, base64: String) {
-            try {
-                val clean = base64.replace("\n", "").replace(" ", "")
-                val bytes = Base64.decode(clean, Base64.DEFAULT)
-                runOnUiThread { saveDirectFile(name, mime, bytes) }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    Toast.makeText(this@MainActivity, R.string.save_failed, Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-
-        @JavascriptInterface
-        fun saveDataUrl(name: String, dataUrl: String) {
-            try {
-                val commaIdx = dataUrl.indexOf(',')
-                if (commaIdx < 0) return
-                val header = dataUrl.substring(5, commaIdx) // after "data:"
-                val mime = if (header.endsWith(";base64")) header.removeSuffix(";base64")
-                           .ifEmpty { "application/octet-stream" } else "text/plain"
-                val b64 = dataUrl.substring(commaIdx + 1)
-                val bytes = if (header.endsWith(";base64"))
-                    Base64.decode(b64, Base64.DEFAULT)
-                else b64.toByteArray(Charsets.UTF_8)
-                runOnUiThread { saveDirectFile(name, mime, bytes) }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    Toast.makeText(this@MainActivity, R.string.save_failed, Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-
-        @JavascriptInterface
-        fun retry() {
-            runOnUiThread {
-                pageError = false
-                web.loadUrl(serverUrl)
-            }
-        }
-    }
-
-    /* ── v2.10.0 (درخواست کاربر ۱۰) — ریشهٔ «ذخیره فایل ناموفق بود» ──
-     * وب‌پنل برای CSV/JSON مقدار mime مرکب می‌فرستد (مثل text/csv;charset=utf-8).
-     * MediaStore چنین مقداری را رد می‌کند/insert با null برمی‌گردد → ذخیره شکست
-     * می‌خورد در حالی که وب پیام «فایل خروجی ایجاد شد» داده بود.
-     * راه‌حل: پاک‌سازی mime (حذف پارامترها + اعتبارسنجی الگو) + تلاش مجدد با
-     * octet-stream + fallback نهایی به پوشهٔ اختصاصی اپ + نمایش دلیل خطا. */
-    private fun cleanMime(mime: String): String {
-        val m = (mime.substringBefore(';')).trim().lowercase(java.util.Locale.ROOT)
-        return if (Regex("^[-\\w.+]+/[-\\w.+]+$").matches(m) && m.length <= 127) m else "application/octet-stream"
-    }
-
-    @Suppress("DEPRECATION")
-    private fun saveDirectFile(name: String, mime: String, bytes: ByteArray) {
-        val cleanName = sanitize(name)
-        val cleanType = cleanMime(mime)
-        try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                try {
-                    saveViaMediaStore(cleanName, cleanType, bytes)
-                } catch (e: Exception) {
-                    // تلاش مجدد با mime عمومی (برخی دستگاه‌ها به mime خاص حساس‌اند)
-                    try {
-                        saveViaMediaStore(cleanName, "application/octet-stream", bytes)
-                    } catch (e2: Exception) {
-                        // fallback نهایی: پوشهٔ اختصاصی اپ (بدون مجوز اضافه) + بازکردن/اشتراک
-                        saveToAppDownloads(cleanName, bytes)
-                    }
-                }
-            } else {
-                if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                    != PackageManager.PERMISSION_GRANTED
-                ) {
-                    pendingDownload = Triple(name, mime, bytes)
-                    storagePermission.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                    return
-                }
-                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                if (!dir.exists()) dir.mkdirs()
-                FileOutputStream(File(dir, cleanName)).use { it.write(bytes) }
-                Toast.makeText(this, getString(R.string.saved_to_downloads, cleanName), Toast.LENGTH_LONG).show()
-            }
-        } catch (e: Exception) {
-            Toast.makeText(this, getString(R.string.save_failed_reason, e.message ?: "?"), Toast.LENGTH_LONG).show()
-        }
-    }
-
-    /** v2.10.0 — ذخیرهٔ MediaStore (Android 10+) با پاکسازی mime و تضمین بستن IS_PENDING */
-    private fun saveViaMediaStore(name: String, mime: String, bytes: ByteArray) {
-        val values = android.content.ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, name)
-            put(MediaStore.Downloads.MIME_TYPE, mime)
-            put(MediaStore.Downloads.IS_PENDING, 1)
-        }
-        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: throw IllegalStateException("MediaStore insert null")
-        try {
-            contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
-                ?: throw IllegalStateException("openOutputStream null")
-        } catch (e: Exception) {
-            // فایل ناقص — ردیف pending را حذف کنیم تا فایل خالی در Downloads نماند
-            try { contentResolver.delete(uri, null, null) } catch (_: Exception) {}
-            throw e
-        }
-        values.clear()
-        values.put(MediaStore.Downloads.IS_PENDING, 0)
-        contentResolver.update(uri, values, null, null)
-        Toast.makeText(this, getString(R.string.saved_to_downloads, name), Toast.LENGTH_LONG).show()
-    }
-
-    /** v2.10.0 — fallback: پوشهٔ Downloads اختصاصی اپ + اعلان با مسیر فایل */
-    private fun saveToAppDownloads(name: String, bytes: ByteArray) {
-        val dir = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "exports")
-        if (!dir.exists()) dir.mkdirs()
-        val f = File(dir, name)
-        FileOutputStream(f).use { it.write(bytes) }
-        Toast.makeText(this, getString(R.string.saved_app_dir, name, dir.absolutePath), Toast.LENGTH_LONG).show()
-    }
-
-    private fun sanitize(name: String): String {
-        return name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-            .replace(Regex("[\\x00-\\x1f]"), "")
-            .trim()
-            .take(120).ifEmpty { "sahand-file" }
-    }
-
-    // ── State ─────────────────────────────────────────────────
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        if (::web.isInitialized) web.saveState(outState)
-    }
-
-    override fun onPause() {
-        super.onPause()
-        if (::web.isInitialized) {
-            web.onPause()
-            CookieManager.getInstance().flush()
-        }
-        // v2.9.7 — بررسی دوره‌ای نسخهٔ سرور متوقف (اپ در پس‌زمینه)
-        versionCheckHandler.removeCallbacks(versionCheckTask)
-        // v2.9.6 — اعلان‌ها در پس‌زمینه: polling سبک تا وقتی اپ در پس‌زمینه است
-        startBackgroundNotifyPolling()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (::web.isInitialized) web.onResume()
-        // v2.9.7 — بازگشت به اپ: فوراً نسخه چک کن + هر ۵ دقیقه (تحویل
-        // تضمینی آپدیت سرور برای اپ‌های همیشه‌باز)
-        try { ensureFreshContent(periodic = true) } catch (_: Exception) {}
-        versionCheckHandler.removeCallbacks(versionCheckTask)
-        versionCheckHandler.postDelayed(versionCheckTask, 5 * 60 * 1000L)
-        // v2.10.0 (درخواست کاربر ۱۱) — اگر اعلان‌ها خاموش‌اند، هشدار فعال‌سازی
-        try { showNotificationWarningIfNeeded() } catch (_: Exception) {}
-        // v2.10.0 (درخواست کاربر ۸) — بررسی نسخهٔ جدید اپ پس از بازگشت
-        try { checkAppUpdate(forceDialog = false) } catch (_: Exception) {}
-        // v2.9.6 — وب‌اپ خودش polling را برمی‌گرداند
-        stopBackgroundNotifyPolling()
-    }
-
-    override fun onDestroy() {
-        // v2.10.0 — لغو ثبت دریافت‌کنندهٔ دانلود APK
-        try { unregisterReceiver(apkDownloadReceiver) } catch (_: Exception) {}
-        if (::web.isInitialized) web.destroy()
-        super.onDestroy()
-    }
-
-    // ── v2.9.1 — Notification channel + System notifications bridge ──
-
+    // ═════════════════════ اعلان‌های سیستمی ═════════════════════
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < 26) return
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (nm.getNotificationChannel(NOTIF_CHANNEL) != null) return
+        val mgr = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        if (mgr.getNotificationChannel(NOTIF_CHANNEL) != null) return
         val ch = NotificationChannel(
             NOTIF_CHANNEL,
             getString(R.string.notif_channel_name),
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = getString(R.string.notif_channel_desc)
-            enableVibration(true)
-        }
-        nm.createNotificationChannel(ch)
+            NotificationManager.IMPORTANCE_HIGH // v2.11.0 — HIGH: اعلان سربرگ‌دار و سریع
+        )
+        ch.description = getString(R.string.notif_channel_desc)
+        ch.enableVibration(true)
+        ch.vibrationPattern = longArrayOf(200, 100, 200)
+        ch.enableLights(true)
+        ch.lightColor = 0xFF0ea5e9.toInt()
+        mgr.createNotificationChannel(ch)
     }
 
-    /** درخواست مجوز اعلان روی Android 13+
-     *  v2.10.0 (درخواست کاربر ۱۱ — «نوتیفیکیشن‌های سیستمی از کار افتادند») —
-     *  قبلاً فقط «یک‌بار برای همیشه» پرسیده می‌شد؛ اگر کاربر رد می‌کرد یا دیالوگ
-     *  را نمی‌دید، nm.notify() در Android 13+ بی‌صدا رد می‌شد و هیچ اعلانی
-     *  دیگر نمایش داده نمی‌شد. اکنون: تا زمانی که مجوز داده نشده و رد قطعی
-     *  نشده، در هر اجرا دوباره پرسیده می‌شود + هشدار و میانبر تنظیمات. */
-    private fun requestNotificationPermissionIfNeeded() {
+    /**
+     * v2.11.0 — درخواست مجوز اعلان:
+     * • askIfNeverDenied=true فقط وقتی قبلاً هرگز درخواست نشده بپرسد
+     * • سیستم بعد از دو رد، خودش می‌بندد؛ در آن حالت باید کاربر به تنظیمات هدایت شود.
+     */
+    private fun requestNotificationPermissionIfNeeded(askIfNeverDenied: Boolean = false) {
         if (Build.VERSION.SDK_INT < 33) return
-        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-            == PackageManager.PERMISSION_GRANTED
-        ) return
-        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val deniedForever = !shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS)
-                && prefs.getBoolean("notif_perm_denied_once", false)
-        if (deniedForever) return // رد قطعی — کاربر باید از تنظیمات فعال کند (کارت هشدار جدا نمایش داده می‌شود)
-        prefs.edit().putBoolean("notif_perm_denied_once", true).apply() // برای تشخیص ردِ قطعی در اجرای بعدی
-        notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        val sp = getSharedPreferences(PREFS, 0)
+        val neverAsked = !sp.getBoolean("notif_asked_once", false)
+        if (askIfNeverDenied && !neverAsked) return
+        sp.edit().putBoolean("notif_asked_once", true).apply()
+        notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
-    /** v2.10.0 — وضعیت واقعی اعلان‌ها: مجوز + فعال بودن کانال */
     private fun notificationsReallyEnabled(): Boolean {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (!nm.areNotificationsEnabled()) return false
+        val mgr = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        if (!mgr.areNotificationsEnabled()) return false
         if (Build.VERSION.SDK_INT >= 26) {
-            val ch = nm.getNotificationChannel(NOTIF_CHANNEL)
-            if (ch != null && ch.importance == NotificationManager.IMPORTANCE_NONE) return false
+            val ch = mgr.getNotificationChannel(NOTIF_CHANNEL) ?: return true
+            if (ch.importance == NotificationManager.IMPORTANCE_NONE) return false
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            return checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         }
         return true
     }
 
-    /** v2.10.0 — بازکردن تنظیمات اعلان اپ (مجوز رد‌شدهٔ قطعی یا کانال خاموش) */
     private fun openNotificationSettings() {
         try {
-            val intent = Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-                putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
-            }
+            val intent = Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            intent.putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
             startActivity(intent)
         } catch (_: Exception) {
             try {
-                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.parse("package:$packageName")))
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             } catch (_: Exception) {}
         }
     }
 
-    /** v2.10.0 — هشدار روزانه (حداکثر) وقتی اعلان‌ها خاموش‌اند — با میانبر فعال‌سازی */
+    /** روزی یک‌بار هشدار داخلی وقتی اعلان خاموش است */
     private fun showNotificationWarningIfNeeded() {
         if (notificationsReallyEnabled()) return
-        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val today = android.text.format.DateFormat.format("yyyyMMdd", java.util.Date()).toString()
-        if (prefs.getString("notif_warn_day", "") == today) return
-        prefs.edit().putString("notif_warn_day", today).apply()
+        val sp = getSharedPreferences(PREFS, 0)
+        val today = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+        if (sp.getString("notif_warn_day", "") == today) return
+        sp.edit().putString("notif_warn_day", today).apply()
         runOnUiThread {
-            AlertDialog.Builder(this)
+            AlertDialog.Builder(this, R.style.Theme_Sahand_Dialog)
                 .setTitle(R.string.notif_off_title)
                 .setMessage(R.string.notif_off_msg)
                 .setPositiveButton(R.string.notif_open_settings) { _, _ -> openNotificationSettings() }
@@ -996,25 +741,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** نمایش اعلان سیستمی — id عددی از hash تگ برای به‌روزرسانی هم‌نوع‌ها
-     *  v2.10.0 — پیش‌شرط واقعی اعلان‌ها بررسی می‌شود (مجوز + کانال) تا
-     *  notify() بی‌صدا شکست نخورد؛ در صورت خاموشی، هشدار درون‌اپی نمایش
-     *  داده می‌شود (حداکثر یک‌بار در روز) */
-    private fun postSystemNotification(title: String, body: String, tag: String, url: String) {
+    /** ارسال اعلان سیستمی — مقاوم‌سازی‌شده (v2.11.0) */
+    fun postSystemNotification(title: String, body: String, tag: String, url: String) {
         try {
             if (!notificationsReallyEnabled()) {
                 showNotificationWarningIfNeeded()
                 return
             }
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             createNotificationChannel()
-            val intent = Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra("notif_url", url)
-            }
-            val pending = PendingIntent.getActivity(
+            val mgr = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            val intent = Intent(this, MainActivity::class.java)
+            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            intent.putExtra("notif_url", url)
+            val pi = android.app.PendingIntent.getActivity(
                 this, tag.hashCode(), intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
             )
             val notif = NotificationCompat.Builder(this, NOTIF_CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_notify)
@@ -1022,174 +763,257 @@ class MainActivity : AppCompatActivity() {
                 .setContentText(body)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(body))
                 .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setVibrate(longArrayOf(200, 100, 200))
-                .setContentIntent(pending)
+                .setContentIntent(pi)
                 .build()
-            nm.notify(tag.hashCode(), notif)
-        } catch (_: Exception) {
-            // fail-soft
-        }
+            mgr.notify(tag.hashCode(), notif)
+        } catch (_: Exception) {}
     }
 
-    /**
-     * v2.9.1 — SahandNative: پل JS ← اندروید
-     * وب‌اپ (system-notify.ts) این متدها را صدا می‌زند تا اعلان سیستمی نمایش
-     * داده شود؛ در مرورگر همین منطق با Service Worker انجام می‌شود.
-     */
+    /** پل JS → اعلان سیستمی */
     inner class NativeBridge {
-        @JavascriptInterface
+        @android.webkit.JavascriptInterface
         fun showNotification(title: String, body: String, tag: String, url: String) {
             runOnUiThread { postSystemNotification(title, body, tag, url) }
         }
 
-        @JavascriptInterface
+        @android.webkit.JavascriptInterface
         fun isNotificationEnabled(): Boolean {
-            return if (Build.VERSION.SDK_INT >= 33)
-                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
-                    PackageManager.PERMISSION_GRANTED
-            else true
+            return if (Build.VERSION.SDK_INT >= 33) {
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            } else true
         }
 
-        @JavascriptInterface
+        @android.webkit.JavascriptInterface
         fun requestNotificationPermission() {
-            if (Build.VERSION.SDK_INT >= 33 &&
-                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED
-            ) {
-                runOnUiThread { notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS) }
+            if (Build.VERSION.SDK_INT < 33) return
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+            runOnUiThread { notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }
+        }
+    }
+
+    /** پل JS → ذخیرهٔ فایل */
+    inner class FileBridge {
+        @android.webkit.JavascriptInterface
+        fun saveBase64(name: String, mime: String, base64: String) {
+            try {
+                val bytes = android.util.Base64.decode(base64.replace("\n", "").replace(" ", ""), android.util.Base64.DEFAULT)
+                runOnUiThread { saveDirectFile(name, mime, bytes) }
+            } catch (_: Exception) {
+                runOnUiThread { Toast.makeText(this@MainActivity, R.string.save_failed, Toast.LENGTH_SHORT).show() }
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun saveDataUrl(name: String, dataUrl: String) {
+            try {
+                val comma = dataUrl.indexOf(',')
+                if (comma < 0) return
+                var mime = dataUrl.substring(5, comma)
+                val isBase64 = mime.endsWith(";base64")
+                if (isBase64) mime = mime.removeSuffix(";base64")
+                if (mime.isEmpty()) mime = "application/octet-stream"
+                val data = dataUrl.substring(comma + 1)
+                val bytes = if (isBase64) android.util.Base64.decode(data, android.util.Base64.DEFAULT)
+                else data.toByteArray(Charsets.UTF_8)
+                runOnUiThread { saveDirectFile(name, mime, bytes) }
+            } catch (_: Exception) {
+                runOnUiThread { Toast.makeText(this@MainActivity, R.string.save_failed, Toast.LENGTH_SHORT).show() }
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun retry() {
+            runOnUiThread {
+                pageError = false
+                web.loadUrl(serverUrl)
             }
         }
     }
 
-    // ── v2.9.6 — اعلان‌های پس‌زمینه (polling سبک وقتی اپ pause شده) ──
-    // WebView در pause تایمرهای JS را متوقف می‌کند؛ برای اینکه اعلان‌ها
-    // «وقتی اپ در پس‌زمینه است» هم برسند، اپ خودش هر ۶۰ ثانیه شمارِ
-    // خوانده‌نشده‌ها را از سرور می‌خواند (با کوکی نشست وب) و در صورت
-    // افزایش، اعلان سیستمی می‌فرستد.
-
-    private var bgPollHandler: android.os.Handler? = null
-    private var bgPollRunnable: Runnable? = null
-    private var bgChatUnread = -1
-    private var bgNotifUnread = -1
-    private var bgUserPanel: String? = null
-    private var bgTechId: String? = null
-
+    // ═════════════════════ polling اعلان پس‌زمینه ═════════════════════
     private fun startBackgroundNotifyPolling() {
-        if (bgPollHandler != null) return
-        if (!::web.isInitialized) return
-        try {
-            // هویت کاربر از localStorage (asm-auth) — برای endpoint اعلان‌ها
-            web.evaluateJavascript(
-                "(function(){try{var a=JSON.parse(localStorage.getItem('asm-auth')||'null');" +
-                    "return a?JSON.stringify({panel:(a.state&&a.state.panel)||'',techId:(a.state&&a.state.technicianId)||''}):null}" +
-                    "}catch(e){return null}})()"
-            ) { res ->
+        // پنل کاربر از localStorage خوانده می‌شود (agency / technician)
+        web.evaluateJavascript(
+            """(function(){try{var a=JSON.parse(localStorage.getItem('asm-auth')||'null');
+return a?JSON.stringify({panel:(a.state&&a.state.panel)||'',techId:(a.state&&a.state.technicianId)||''}):null}}catch(e){return null}})()"""
+        ) { raw ->
+            if (raw != null && raw != "null" && raw.length > 4) {
                 try {
-                    if (res != null && res != "null" && res.length > 4) {
-                        val o = org.json.JSONObject(res)
-                        bgUserPanel = o.optString("panel", "").ifBlank { null }
-                        bgTechId = o.optString("techId", "").ifBlank { null }
-                    }
+                    val o = JSONObject(raw)
+                    bgUserPanel = o.optString("panel", "").ifBlank { null }
+                    bgTechId = o.optString("techId", "").ifBlank { null }
+                    /* v2.11.1 — نقش/ورود در SharedPreferences ذخیره می‌شود تا
+                     * NotifyService (پس‌زمینه/بوت) بدون WebView هم بتواند poll کند */
+                    val sp = getSharedPreferences(PREFS, 0)
+                    sp.edit()
+                        .putString("user_panel", bgUserPanel ?: "")
+                        .putString("user_tech_id", bgTechId ?: "")
+                        .putBoolean("user_logged_in", true)
+                        .apply()
+                    NotificationHub.userPanel = bgUserPanel
+                    NotificationHub.techId = bgTechId
+                    /* v2.11.1 — سرویس پیش‌زمینهٔ اعلان‌ها (حتی با بستن اپ فعال می‌ماند) */
+                    NotifyService.start(this@MainActivity)
                 } catch (_: Exception) {}
             }
-            bgChatUnread = -1
-            bgNotifUnread = -1
-            val h = android.os.Handler(android.os.Looper.getMainLooper())
-            val r = object : Runnable {
-                override fun run() {
-                    pollUnreadInBackground()
-                    h.postDelayed(this, 60_000)
-                }
+        }
+        /* v2.11.1 — شمارنده‌ها مشترک با سرویس (NotificationHub) — نه متغیر محلی */
+        val handler = bgPollHandler ?: Handler(Looper.getMainLooper())
+        val runnable = object : Runnable {
+            override fun run() {
+                pollUnreadInBackground()
+                handler.postDelayed(this, 60_000L)
             }
-            h.postDelayed(r, 20_000)
-            bgPollHandler = h
-            bgPollRunnable = r
-        } catch (_: Exception) {}
+        }
+        if (bgPollRunnable != null) handler.removeCallbacks(bgPollRunnable!!)
+        handler.removeCallbacks(runnable)
+        handler.postDelayed(runnable, 15_000L)
+        bgPollHandler = handler
+        bgPollRunnable = runnable
     }
 
     private fun stopBackgroundNotifyPolling() {
-        try {
-            bgPollRunnable?.let { r -> bgPollHandler?.removeCallbacks(r) }
-        } catch (_: Exception) {}
+        bgPollRunnable?.let { bgPollHandler?.removeCallbacks(it) }
         bgPollHandler = null
         bgPollRunnable = null
     }
 
-    /** خواندن متن پاسخ GET با کوکی نشست وب (روی نخ جدا) */
     private fun fetchBodyWithSession(path: String): String? {
         return try {
             val conn = openConnection(serverUrl.trimEnd('/') + path, "GET")
             try {
-                if (conn.responseCode !in 200..299) return null
-                conn.inputStream.bufferedReader().use { it.readText() }
-            } finally {
-                conn.disconnect()
-            }
-        } catch (_: Exception) {
-            null
-        }
+                val code = conn.responseCode
+                if (code in 200..299) {
+                    conn.inputStream.use { ins ->
+                        BufferedReader(InputStreamReader(ins, Charsets.UTF_8)).use { it.readText() }
+                    }
+                } else null
+            } finally { conn.disconnect() }
+        } catch (_: Exception) { null }
     }
 
-    private fun pollUnreadInBackground() {
+    private fun openConnection(urlStr: String, method: String): HttpURLConnection {
+        val conn = URL(urlStr).openConnection() as HttpURLConnection
+        conn.requestMethod = method
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
+        CookieManager.getInstance().getCookie(serverUrl)?.let { conn.setRequestProperty("Cookie", it) }
+        conn.setRequestProperty("User-Agent", web.settings.userAgentString)
+        return conn
+    }
+
+    fun pollUnreadInBackground() {
         Thread {
             try {
-                // ۱) پیام‌های چت خوانده‌نشدهٔ «من» (همهٔ گفتگوها)
-                val chatBody = fetchBodyWithSession("/api/chat?unread=mine")
-                if (chatBody != null) {
-                    val cu = try {
-                        org.json.JSONObject(chatBody).optInt("unreadCount", 0)
-                    } catch (_: Exception) { -1 }
-                    if (cu >= 0) {
-                        val first = bgChatUnread < 0
-                        if (!first && cu > bgChatUnread) {
+                // ۱) پیام‌های چت خوانده‌نشده
+                fetchBodyWithSession("/api/chat?unread=mine")?.let { body ->
+                    try {
+                        val count = JSONObject(body).optInt("unreadCount", 0)
+                        /* v2.11.1 — شمارندهٔ مشترک با سرویس؛ نخستین poll هم
+                         * پیام‌های موجود را اعلان می‌کند (هیچ نوتیفی از دست نرود) */
+                        val delta = NotificationHub.takeChatDelta(count)
+                        if (delta > 0) {
                             postSystemNotification(
                                 "پیام جدید",
-                                "${cu - bgChatUnread} پیام خوانده‌نشده دارید — برای مشاهده چت را باز کنید",
+                                (if (delta == 1) "یک پیام" else "$delta پیام") + " خوانده‌نشده دارید — برای مشاهده چت را باز کنید",
                                 "chat-unread-bg", "/"
                             )
                         }
-                        bgChatUnread = cu
-                    }
+                    } catch (_: Exception) {}
                 }
                 // ۲) اعلان‌های سرویس‌کار / سرویس‌های در انتظار نمایندگی
                 val isTech = bgUserPanel == "technician" && !bgTechId.isNullOrEmpty()
-                val path = if (isTech) "/api/notification?technicianId=$bgTechId" else "/api/entity?type=service&status=pending"
-                val body = fetchBodyWithSession(path)
-                if (body != null) {
-                    val n = try {
-                        val arr = org.json.JSONArray(body)
+                val path = if (isTech) "/api/notification?technicianId=$bgTechId"
+                           else "/api/entity?type=service&status=pending&_pageSize=200"
+                fetchBodyWithSession(path)?.let { body ->
+                    try {
+                        val arr = JSONArray(body)
+                        var count = -1
                         if (isTech) {
                             var c = 0
                             for (i in 0 until arr.length()) {
-                                val o = arr.optJSONObject(i) ?: continue
-                                if (!o.optBoolean("isRead", false)) c++
+                                val o = arr.optJSONObject(i)
+                                if (o != null && !o.optBoolean("isRead", false)) c++
                             }
-                            c
+                            count = c
                         } else {
-                            arr.length()
+                            count = arr.length()
                         }
-                    } catch (_: Exception) { -1 }
-                    if (n >= 0) {
-                        val first = bgNotifUnread < 0
-                        if (!first && n > bgNotifUnread) {
-                            if (isTech) {
-                                postSystemNotification("اعلان جدید", "${n - bgNotifUnread} اعلان خوانده‌نشده جدید دارید", "notif-bg", "/")
-                            } else {
-                                postSystemNotification("سرویس جدید", "${n - bgNotifUnread} سرویس جدید در انتظار بررسی", "notif-bg", "/")
+                        if (count >= 0) {
+                            /* v2.11.1 — نخستین poll هم اعلان می‌دهد + شمارندهٔ مشترک سرویس */
+                            val delta = NotificationHub.takeNotifDelta(count)
+                            if (delta > 0) {
+                                if (isTech) {
+                                    postSystemNotification(
+                                        "اعلان جدید",
+                                        (if (delta == 1) "یک اعلان" else "$delta اعلان") + " خوانده‌نشده جدید دارید",
+                                        "notif-bg", "/"
+                                    )
+                                } else {
+                                    postSystemNotification(
+                                        "سرویس جدید",
+                                        (if (delta == 1) "یک سرویس" else "$delta سرویس") + " جدید در انتظار بررسی",
+                                        "notif-bg", "/"
+                                    )
+                                }
                             }
                         }
-                        bgNotifUnread = n
-                    }
+                    } catch (_: Exception) {}
                 }
-            } catch (_: Exception) {
-                // fail-soft
-            }
+            } catch (_: Exception) {}
         }.start()
     }
 
-    // Exit dialog with settings shortcut
+    // ═════════════════════ بروزرسانی محتوا در پس‌زمینه ═════════════════════
+    /* v2.11.2 (درخواست ۶ — «صفحه چندین بار رفرش می‌شود») — نسخهٔ سرور فقط
+     * ذخیره می‌شود و خودِ صفحه (گارد __SAH_BUILD در admin-ext.js) در صورت
+     * کشِ قدیمی، حداکثر «یک‌بار» و بدون حلقه reload می‌کند. قبلاً اینجا
+     * یک reload دوم از خود اپ هم اضافه می‌شد → کاربر چند رفرش می‌دید. */
+    private fun ensureFreshContent(periodic: Boolean) {
+        try {
+            val verUrl = serverUrl.trimEnd('/') + "/version.json"
+            Thread {
+                try {
+                    val conn = URL(verUrl).openConnection() as HttpURLConnection
+                    conn.connectTimeout = 8000
+                    conn.readTimeout = 8000
+                    conn.setRequestProperty("User-Agent", web.settings.userAgentString)
+                    conn.setRequestProperty("Cache-Control", "no-cache")
+                    val text = conn.inputStream.use { ins ->
+                        BufferedReader(InputStreamReader(ins, Charsets.UTF_8)).use { it.readText() }
+                    }
+                    conn.disconnect()
+                    val v = JSONObject(text).optString("version", "")
+                    if (v.isNotEmpty()) {
+                        getSharedPreferences(PREFS, 0).edit().putString("last_server_version", v).apply()
+                    }
+                } catch (_: Exception) {}
+            }.start()
+        } catch (_: Exception) {}
+    }
+
+    private fun reloadBypassingCache() {
+        try { web.settings.cacheMode = WebSettings.LOAD_NO_CACHE } catch (_: Exception) {}
+        try { web.clearCache(true) } catch (_: Exception) {}
+        Handler(Looper.getMainLooper()).postDelayed({
+            try { web.reload() } catch (_: Exception) {}
+        }, 300)
+    }
+
+    // ═════════════════════ متفرقه ═════════════════════
+    fun openExternal(uri: Uri) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, R.string.no_app, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun showExitDialog() {
-        AlertDialog.Builder(this)
+        AlertDialog.Builder(this, R.style.Theme_Sahand_Dialog)
             .setTitle(R.string.app_exit_title)
             .setMessage(R.string.app_exit_msg)
             .setPositiveButton(R.string.exit) { _, _ -> finish() }
@@ -1198,5 +1022,138 @@ class MainActivity : AppCompatActivity() {
             }
             .setNeutralButton(R.string.cancel, null)
             .show()
+    }
+
+    // ═════════════════════ v2.11.2 — تپ قلب اپ (ثبت دستگاه در لایسنس) ═════════════════════
+    /**
+     * درخواست کاربر: «در مدیریت لایسنس دستگاه‌هایی که اپ اندروید نصب
+     * کرده‌اند نمایش داده نشود (چه سرویسکار چه مدیر)». ریشه: اپ هیچ‌وقت
+     * خودش را به سرور لایسنس معرفی نمی‌کرد. حالا هر ۶ ساعت + با هر
+     * ورود، POST /api/app-heartbeat به «پنل» می‌فرستد؛ پنل licenseKey را
+     * اضافه کرده و به v1/heartbeat سرور لایسنس فوروارد می‌کند → دستگاه
+     * در جدول devices با platform=main_app ثبت و در پنل مدیریت لایسنس
+     * (داشبورد ← دستگاه‌ها + تب دستگاه‌های هر لایسنس) دیده می‌شود.
+     *
+     * v2.11.2 (درخواست ۱۰) — meta: اطلاعات جامع گوشی/برنامه (برند، مدل،
+     * SDK، صفحه‌نمایش، زبان، رم، نصب اولیه…) که پنل LM در دکمهٔ «جزئیات
+     * دستگاه» نشان می‌دهد.
+     */
+    private fun sendAppHeartbeatIfNeeded() {
+        if (serverUrl.isBlank()) return
+        val sp = getSharedPreferences(PREFS, 0)
+        val last = sp.getLong("last_app_heartbeat", 0L)
+        if (System.currentTimeMillis() - last < 6 * 3600_000L) return
+        sp.edit().putLong("last_app_heartbeat", System.currentTimeMillis()).apply() /* جلوگیری از انباشت */
+        Thread {
+            try {
+                val deviceId = android.provider.Settings.Secure.getString(
+                    contentResolver, android.provider.Settings.Secure.ANDROID_ID
+                ) ?: ""
+                if (deviceId.isBlank()) return@Thread
+                val role = try { BuildConfig.FLAVOR } catch (_: Exception) { "agency" } /* agency / tech */
+                val payload = JSONObject()
+                    .put("deviceId", deviceId)
+                    .put("deviceName", "${Build.MANUFACTURER} ${Build.MODEL}")
+                    .put("osVersion", "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                    .put("appVersion", BuildConfig.VERSION_NAME)
+                    .put("role", role)
+                /* v2.11.2 — مشخصات جامع گوشی/برنامه برای «جزئیات دستگاه» در پنل لایسنس */
+                try {
+                    val dm = resources.displayMetrics
+                    val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+                    val memInfo = android.app.ActivityManager.MemoryInfo()
+                    am.getMemoryInfo(memInfo)
+                    val pm = packageManager
+                    val pkgInfo = pm.getPackageInfo(packageName, 0)
+                    val meta = JSONObject()
+                        .put("manufacturer", Build.MANUFACTURER)
+                        .put("model", Build.MODEL)
+                        .put("device", Build.DEVICE)
+                        .put("product", Build.PRODUCT)
+                        .put("android", Build.VERSION.RELEASE)
+                        .put("sdk", Build.VERSION.SDK_INT.toString())
+                        .put("security", android.os.Build.VERSION.SECURITY_PATCH ?: "")
+                        .put("app", BuildConfig.VERSION_NAME)
+                        .put("role", if (role == "tech") "سرویس‌کار" else "مدیر (نمایندگی)")
+                        .put("screen", "${dm.widthPixels}x${dm.heightPixels}")
+                        .put("density", "${dm.densityDpi}dpi (${String.format("%.1f", dm.density)}x)")
+                        .put("locale", java.util.Locale.getDefault().toLanguageTag())
+                        .put("memory", String.format("%.1f GB", memInfo.totalMem / 1073741824.0))
+                        .put("package", packageName)
+                        .put("firstInstall", pkgInfo.firstInstallTime.toString())
+                        .put("lastUpdate", pkgInfo.lastUpdateTime.toString())
+                        .put("timezone", java.util.TimeZone.getDefault().id)
+                    payload.put("meta", meta)
+                } catch (_: Exception) { /* meta اختیاری است */ }
+                val conn = URL(serverUrl.trimEnd('/') + "/api/app-heartbeat").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = 10_000
+                conn.readTimeout = 10_000
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("Accept", "application/json")
+                CookieManager.getInstance().getCookie(serverUrl)?.let { conn.setRequestProperty("Cookie", it) }
+                conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                conn.inputStream.close()
+                conn.disconnect()
+                if (code !in 200..299) {
+                    /* fail-soft: تلاش بعدی در فرصت بعدی */
+                    getSharedPreferences(PREFS, 0).edit().putLong("last_app_heartbeat", last).apply()
+                }
+            } catch (_: Exception) {
+                getSharedPreferences(PREFS, 0).edit().putLong("last_app_heartbeat", 0L).apply()
+            }
+        }.start()
+    }
+
+    // ═════════════════════ چرخهٔ عمر ═════════════════════
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        try { web.saveState(outState) } catch (_: Exception) {}
+    }
+
+    override fun onResume() {
+        super.onResume()
+        try { CookieManager.getInstance().flush() } catch (_: Exception) {}
+        // v2.11.0 — با بازگشت به برنامه، poll فوری + بررسی بروزرسانی
+        startBackgroundNotifyPolling()
+        sendAppHeartbeatIfNeeded() // v2.11.1 — تپ قلب دستگاه
+        showNotificationWarningIfNeeded()
+        ensureFreshContent(periodic = true)
+    }
+
+    override fun onPause() {
+        try { CookieManager.getInstance().flush() } catch (_: Exception) {}
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        versionCheckHandler.removeCallbacks(versionCheckTask)
+        stopBackgroundNotifyPolling()
+        try { unregisterReceiver(apkDownloadReceiver) } catch (_: Exception) {}
+        super.onDestroy()
+    }
+
+    // ═════════════════════ launchers مجوزها ═════════════════════
+    private val geoPermission: ActivityResultLauncher<String> = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val storagePermission: ActivityResultLauncher<String> = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) Toast.makeText(this, R.string.storage_denied, Toast.LENGTH_LONG).show()
+    }
+    private val notifPermission: ActivityResultLauncher<String> = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            postSystemNotification(
+                "اعلان‌های سهند سرویس فعال شد",
+                "از این پس اعلان‌ها به‌صورت سیستمی نمایش داده می‌شوند",
+                "notify-welcome", "/"
+            )
+        } else {
+            getSharedPreferences(PREFS, 0).edit().putBoolean("notif_denied_once", true).apply()
+        }
+    }
+    private val micPermission: ActivityResultLauncher<String> = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val req = pendingAudioRequest
+        pendingAudioRequest = null
+        if (granted) req?.grant(req.resources) else req?.deny()
     }
 }

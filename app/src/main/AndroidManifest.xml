@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- v2.9.1 — مجوزهای کامل برای عملکرد بی‌نقص اپ (درخواست کاربر):
-         نوتیفیکیشن (Android 13+)، لوکیشن، میکروفون (ضبط پیام صوتی چت)،
-         ذخیره/خواندن رسانه‌ها در حافظه -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -12,48 +9,72 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.CAMERA" />
-    <!-- ذخیرهٔ فایل در حافظه: تا Android 9 نوشتن کلاسیک؛ 10+ اسکوپ‌استوریج (بدون مجوز) -->
-    <uses-permission
-        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
-    <uses-permission
-        android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <!-- Android 13+ — خواندن رسانه‌ها (گالری/فایل‌پیوست) -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    <!-- اجازهٔ вибره برای اعلان‌ها -->
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- v2.10.0 (درخواست کاربر ۸) — نصب خودکار نسخهٔ جدید -->
+    <!-- v2.11.0 — برای نصب خودکار بروزرسانی ( APK دانلودشده) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- v2.11.1 — سرویس پیش‌زمینهٔ اعلان‌ها (هیچ نوتیفی از دست نرود) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
-        android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/Theme.Sahand.Splash"
         android:label="@string/appDisplayName"
-        android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="true"
         android:hardwareAccelerated="true"
-        android:theme="@style/Theme.Sahand.Splash">
+        android:supportsRtl="true"
+        android:extractNativeLibs="false"
+        android:usesCleartextTraffic="true"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:appComponentFactory="androidx.core.app.CoreComponentFactory">
 
         <activity
-            android:name=".MainActivity"
+            android:name="com.sahandservice.app.MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode|density"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.Sahand.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- دیپ‌لینک نوتیفیکیشن‌ها -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+            </intent-filter>
         </activity>
 
         <activity
-            android:name=".SetupActivity"
+            android:name="com.sahandservice.app.SetupActivity"
             android:exported="false"
-            android:theme="@style/Theme.Sahand"
             android:windowSoftInputMode="adjustResize" />
+
+        <!-- v2.11.1 — سرویس پیش‌زمینهٔ اعلان‌ها -->
+        <service
+            android:name="com.sahandservice.app.NotifyService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- v2.11.1 — راه‌اندازی مجدد سرویس بعد از بوت/بروزرسانی اپ -->
+        <receiver
+            android:name="com.sahandservice.app.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

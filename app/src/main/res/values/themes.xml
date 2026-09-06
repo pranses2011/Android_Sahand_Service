@@ -1,24 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Sahand" parent="Theme.MaterialComponents.NoActionBar">
-        <item name="colorPrimary">@color/brand</item>
-        <item name="colorPrimaryVariant">@color/brandDark</item>
-        <item name="colorPrimaryDark">@color/brandDark</item>
-        <item name="colorSecondary">@color/brand</item>
-        <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="android:windowBackground">@color/bgDark</item>
+        <item name="android:textViewStyle">@style/Widget.Sahand.TextView</item>
         <item name="android:statusBarColor">@color/bgDark</item>
         <item name="android:navigationBarColor">@color/bgDark</item>
-        <item name="android:windowBackground">@color/bgDark</item>
-        <item name="fontFamily">@font/vazirmatn_regular</item>
-        <item name="android:textViewStyle">@style/Widget.Sahand.TextView</item>
+        <!-- v2.11.0 — آیکون‌های روشن نوار وضعیت روی پس‌زمینه تیره (اندروید ۱۵
+             رنگ statusBarColor را نادیده می‌گیرد و edge-to-edge اجباری است؛
+             padding نوارها در MainActivity اعمال می‌شود). -->
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27" xmlns:tools="http://schemas.android.com/tools">false</item>
+        <item name="colorOnSecondary">#ffffff</item>
+        <item name="colorPrimary">@color/brand</item>
+        <item name="colorPrimaryDark">@color/brandDark</item>
+        <item name="colorPrimaryVariant">@color/brandDark</item>
+        <item name="colorSecondary">@color/brand</item>
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="27" xmlns:tools="http://schemas.android.com/tools">shortEdges</item>
     </style>
 
-    <!-- Splash: پس‌زمینه سرمه‌ای + لوگو در مرکز -->
     <style name="Theme.Sahand.Splash" parent="Theme.Sahand">
         <item name="android:windowBackground">@drawable/splash</item>
     </style>
 
-    <style name="Widget.Sahand.TextView" parent="android:Widget.Material.TextView">
+    <style name="Widget.Sahand.TextView" parent="Widget.MaterialComponents.TextView">
         <item name="android:fontFamily">@font/vazirmatn_regular</item>
+    </style>
+
+
+    <!-- v2.11.0 — دیالوگ تیره هماهنگ با تم -->
+    <style name="Theme.Sahand.Dialog" parent="ThemeOverlay.MaterialComponents.Dialog.Alert">
+        <item name="android:windowBackground">#1e293b</item>
+        <item name="colorAccent">@color/brand</item>
+        <item name="android:textColorPrimary">@color/textPrimary</item>
+        <item name="android:textColor">@color/textPrimary</item>
+        <item name="buttonBarPositiveButtonStyle">@style/Widget.Sahand.Button</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Widget.Sahand.Button</item>
+        <item name="buttonBarNeutralButtonStyle">@style/Widget.Sahand.Button</item>
+    </style>
+
+    <style name="Widget.Sahand.Button" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/brand</item>
     </style>
 </resources>

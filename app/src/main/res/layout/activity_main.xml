@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- v2.11.0 — ریشه با id برای اعمال padding نوارهای سیستمی (رفع باگ
+     «هیدر زیر نوتیفیکیشن» روی اندروید ۱۵ که edge-to-edge اجباری است). -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:background="@color/bgDark"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bgDark">
+    android:fitsSystemWindows="false">
 
     <WebView
         android:id="@+id/webview"
@@ -10,11 +14,11 @@
         android:layout_height="match_parent" />
 
     <ProgressBar
+        android:layout_gravity="top"
         android:id="@+id/progress"
-        style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="top"
         android:max="100"
-        android:progressTint="@color/brand" />
+        android:progressTint="@color/brand"
+        style="?android:attr/progressBarStyleHorizontal" />
 </FrameLayout>
