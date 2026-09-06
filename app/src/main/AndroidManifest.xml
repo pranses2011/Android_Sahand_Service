@@ -46,11 +46,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- دیپ‌لینک نوتیفیکیشن‌ها -->
+            <!-- دیپ‌لینک نوتیفیکیشن‌ها (v2.11.3 — اسکیمای app://sahand ثبت شد
+                 تا کلیک روی اعلان، صفحهٔ مرتبط را در اپ باز کند) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="app" android:host="sahand" />
             </intent-filter>
         </activity>
 
@@ -60,6 +62,13 @@
             android:windowSoftInputMode="adjustResize" />
 
         <!-- v2.11.1 — سرویس پیش‌زمینهٔ اعلان‌ها -->
+        <service
+            android:name="com.sahandservice.app.PushMsgService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
         <service
             android:name="com.sahandservice.app.NotifyService"
             android:exported="false"

@@ -18,6 +18,8 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.widget.Button
+import android.widget.LinearLayout
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -92,6 +94,14 @@ class MainActivity : AppCompatActivity() {
     private var bgUserPanel: String? = null
     private var bgTechId: String? = null
 
+    // ── v2.11.3 — callback جغرافیای WebView (پس از دادن مجوز) ──
+    private var pendingGeoCallback: GeolocationPermissions.Callback? = null
+    private var pendingGeoOrigin: String? = null
+
+    // ── v2.11.3 — گیت دسترسی‌ها + دیپ‌لینک نوتیف ──
+    private var gateView: ScrollView? = null
+    private var pendingNotifUrl: String? = null
+
     // ── بروزرسانی خودکار ──
     private val versionCheckHandler = Handler(Looper.getMainLooper())
     private val versionCheckTask = object : Runnable {
@@ -144,6 +154,16 @@ class MainActivity : AppCompatActivity() {
         // v2.11.0 — استیت WebView از intent (دیپ‌لینک نوتیف) هم قابل بازیابی است
         val savedState = savedInstanceState ?: intent.getBundleExtra("webState")
         setupWebView(savedState)
+
+        /* v2.11.3 (درخواست ۳ کاربر) — پیش از باز شدن برنامه، همهٔ دسترسی‌های
+         * لازم بررسی/فعال می‌شوند: میکروفون (چت صوتی)، موقعیت مکانی (نقشه)،
+         * اعلان‌ها، دوربین (عکس دستگاه/چت) و ذخیرهٔ فایل (اندروید قدیمی).
+         * اگر همه داده شده باشند، گیت نمایش داده نمی‌شود (شروع سریع). */
+        maybeShowPermissionGate()
+
+        /* v2.11.3 (درخواست ۲ کاربر) — دیپ‌لینک نوتیف: URL در intent (کلیک
+         * روی اعلان هنگام شروع سرد) ذخیره و پس از بارگذاری صفحه اعمال می‌شود */
+        readNotifNavIntent(intent)
 
         ContextCompat.registerReceiver(
             this, apkDownloadReceiver,
@@ -246,6 +266,9 @@ class MainActivity : AppCompatActivity() {
                     startBackgroundNotifyPolling()
                     // v2.11.1 — ثبت دستگاه در سرور لایسنس (مدیریت لایسنس ← دستگاه‌ها)
                     sendAppHeartbeatIfNeeded()
+        PushClient.ensureSetup(this@MainActivity) /* v2.11.4 — راه‌اندازی پوش FCM */
+                    // v2.11.3 — ناوبری دیپ‌لینک نوتیف پس از آماده شدن صفحه
+                    if (gateView == null) applyPendingNotifUrl()
                 }
             }
 
@@ -271,7 +294,19 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
-                callback.invoke(origin, true, false)
+                /* v2.11.3 — پیش از این بدون توجه به مجوزِ خودِ اپ، به صفحه
+                 * grant داده می‌شد → WebView داخلی خطا می‌خورد و موقعیت هرگز
+                 * نمی‌آمد. حالا اگر مجوز مکانی اپ داده نشده باشد درخواست می‌شود
+                 * و نتیجهٔ واقعی به callback داده می‌شود. */
+                if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                    pendingGeoCallback = callback
+                    pendingGeoOrigin = origin
+                    try { geoPermission.launch(Manifest.permission.ACCESS_FINE_LOCATION) } catch (_: Exception) {
+                        callback.invoke(origin, false, false)
+                    }
+                } else {
+                    callback.invoke(origin, true, false)
+                }
             }
 
             override fun onPermissionRequest(request: PermissionRequest) {
@@ -301,8 +336,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        /* v2.11.3 (درخواست ۱ کاربر — «برنامه‌ای برای باز کردن این آدرس یافت نشد»):
+         * مسیرهای blob: و data: هرگز نباید به DownloadManager یا openExternal
+         * بروند (دانلود سیستمی آن‌ها را نمی‌فهمد → fallback قبلی openExternal
+         * → «برنامه‌ای برای باز کردن این آدرس یافت نشد»). این‌ها را از خودِ
+         * صفحهٔ وب (رجیستری blob هوک دانلود یا fetch) استخراج و با
+         * MediaStore ذخیره می‌کنیم. */
         web.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
-            handleSystemDownload(url, contentDisposition, mimeType)
+            when {
+                url.startsWith("data:") -> saveDataUrlDirect(url)
+                url.startsWith("blob:") -> saveBlobViaJs(url, contentDisposition, mimeType)
+                else -> handleSystemDownload(url, contentDisposition, mimeType)
+            }
         }
 
         ensureFreshContent(periodic = false)
@@ -360,10 +405,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ═════════════════════ ذخیرهٔ فایل (blob / data-url / دانلود سیستمی) ═════════════════════
-    /** JS inject — لینک‌های a[download] با blob:/data: را به FileBridge می‌فرستد */
+    /** JS inject — لینک‌های a[download] با blob:/data: را به FileBridge می‌فرستد
+     * v2.11.3 — الگوی رایج خروجی‌های پنل: ساخت <a download> بدون append به DOM
+     * و click() و revoke فوری — چنین کلیکی در document event نهایی نمی‌شود
+     * (propagation فقط خودِ گره است) → HTMLAnchorElement.click هم پچ می‌شود
+     * تا نام فایل صحیح و مسیر ذخیرهٔ بومی برای همهٔ خروجی‌ها کار کند. */
     private fun injectDownloadHook() {
         web.evaluateJavascript("""(function(){
   if (window.__sahandDlHooked) return; window.__sahandDlHooked = true;
+  function __sahandSaveBlob(blob, name){
+    try {
+      var fr = new FileReader();
+      fr.onloadend = function(){
+        var b64 = String(fr.result).split(',')[1] || '';
+        SahandFiles.saveBase64(name || 'sahand-export.bin', blob.type || 'application/octet-stream', b64);
+      };
+      fr.readAsDataURL(blob);
+    } catch(e){}
+  }
+  function __sahandRouteAnchor(a){
+    try {
+      if (!a || !a.getAttribute) return false;
+      var href = a.href || '';
+      var dn = a.getAttribute('download');
+      if (dn == null) return false;
+      if (href.indexOf('blob:') === 0) {
+        var blob = window.__sahandBlobs ? window.__sahandBlobs[href] : null;
+        if (blob) { __sahandSaveBlob(blob, dn); return true; }
+        /* blob در رجیستری نیست (مثلاً قبل از هوک ساخته شده) — fetch همان URL */
+        fetch(href).then(function(r){ return r.blob(); }).then(function(b){
+          __sahandSaveBlob(b, dn);
+        }).catch(function(){});
+        return true; /* نگذاریم مسیر پیش‌فرض (خطای بازکردن) اجرا شود */
+      }
+      if (href.indexOf('data:') === 0) {
+        SahandFiles.saveDataUrl(dn || 'sahand-export.bin', href);
+        return true;
+      }
+    } catch(e){}
+    return false;
+  }
   try {
     var origCreate = URL.createObjectURL.bind(URL);
     window.__sahandBlobs = {};
@@ -372,32 +453,60 @@ class MainActivity : AppCompatActivity() {
       try { window.__sahandBlobs[u] = blob; } catch(e){}
       return u;
     };
+    /* ۱) کلیک‌های داخل document (a[download] متصل به DOM) */
     document.addEventListener('click', function(e){
       var a = e.target && e.target.closest ? e.target.closest('a[download]') : null;
       if (!a) return;
-      var href = a.href || '';
-      try {
-        if (href.indexOf('blob:') === 0) {
-          var blob = window.__sahandBlobs[href];
-          if (blob) {
-            e.preventDefault(); e.stopPropagation();
-            var name = a.getAttribute('download') || 'sahand-export.bin';
-            var reader = new FileReader();
-            reader.onloadend = function(){
-              var b64 = String(reader.result).split(',')[1] || '';
-              SahandFiles.saveBase64(name, blob.type || 'application/octet-stream', b64);
-            };
-            reader.readAsDataURL(blob);
-          }
-        } else if (href.indexOf('data:') === 0) {
-          e.preventDefault(); e.stopPropagation();
-          var dn = a.getAttribute('download') || 'sahand-export.bin';
-          SahandFiles.saveDataUrl(dn, href);
-        }
-      } catch(err){}
+      if (__sahandRouteAnchor(a)) { e.preventDefault(); e.stopPropagation(); }
     }, true);
+    /* ۲) v2.11.3 — a.click() روی <a> «متصل‌نشده» (خروجی‌های گزارش/فاکتور)
+     * document listener نمی‌گیرد → خودِ HTMLAnchorElement.click پچ می‌شود.
+     * اگر مسیر ذخیرهٔ بومی چیدیم، click اصلی اجرا نمی‌شود (مسیر خطادار). */
+    try {
+      var origClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function(){
+        if (__sahandRouteAnchor(this)) return;
+        return origClick.apply(this, arguments);
+      };
+    } catch(e2){}
   } catch(e){}
 })();""", null)
+    }
+
+    /**
+     * v2.11.3 — استخراج blob: از خودِ صفحهٔ وب و ذخیرهٔ بومی.
+     * مسیر fallback است برای وقتی کلیکِ a[download] به هوک نرسیده باشد
+     * (مثلاً خروجی با anchor متصل‌نشده یا window.open). ابتدا رجیستری
+     * __sahandBlobs (مرجع مستقیم به Blob — حتی پس از revokeObjectURL
+     * خوانا است)، سپس fetch(url). اگر هر دو نشد → پیام خطای دقیق.
+     */
+    private fun saveBlobViaJs(url: String, contentDisposition: String, mimeType: String) {
+        val guess = URLUtil.guessFileName(url, contentDisposition, cleanMime(mimeType))
+        val name = sanitize(guess)
+        val js = """(async function(){
+  try {
+    var u = __URL__, nm = __NAME__;
+    var b = (window.__sahandBlobs && window.__sahandBlobs[u]) || null;
+    if (!b) { try { b = await fetch(u).then(function(r){ return r.blob(); }); } catch (eF) {} }
+    if (!b || !b.size) { try { SahandFiles.saveFailed(); } catch (eS) {} return; }
+    var fr = new FileReader();
+    fr.onloadend = function(){
+      var b64 = String(fr.result).split(',')[1] || '';
+      SahandFiles.saveBase64(nm, b.type || '__MIME__', b64);
+    };
+    fr.onerror = function(){ try { SahandFiles.saveFailed(); } catch (eS2) {} };
+    fr.readAsDataURL(b);
+  } catch (e) { try { SahandFiles.saveFailed(); } catch (eS3) {} }
+})()"""
+            .replace("__URL__", escapeJsString(url))
+            .replace("__NAME__", escapeJsString(name))
+            .replace("__MIME__", escapeJsString(cleanMime(mimeType)))
+        web.evaluateJavascript(js, null)
+    }
+
+    /** رشته امن برای درج در JS (کوتیشن و بک‌اسلش) */
+    private fun escapeJsString(s: String): String {
+        return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
     }
 
     private fun saveBlobFromWebView(blobUrl: String, contentDisposition: String, mimeType: String) {
@@ -513,11 +622,211 @@ class MainActivity : AppCompatActivity() {
                         dm.enqueue(req)
                         Toast.makeText(this, R.string.download_started, Toast.LENGTH_SHORT).show()
                     } catch (e: Exception) {
-                        openExternal(Uri.parse(url))
+                        /* v2.11.3 — blob:/data: هرگز با intent باز نمی‌شوند
+                         * (خطای «برنامه‌ای برای باز کردن این آدرس یافت نشد») */
+                        if (url.startsWith("blob:")) saveBlobViaJs(url, contentDisposition, mimeType)
+                        else if (url.startsWith("data:")) saveDataUrlDirect(url)
+                        else openExternal(Uri.parse(url))
                     }
                 }
             } catch (_: Exception) {}
         }.start()
+    }
+
+    // ═════════════════════ v2.11.3 — گیت دسترسی‌ها (درخواست ۳) ═════════════════════
+    /** دسترسی‌های لازم برنامه — همه قبل از باز شدن صفحه بررسی/درخواست می‌شوند */
+    private data class PermRow(val key: String, val label: String, val desc: String, val perms: List<String>)
+
+    private fun permRows(): List<PermRow> {
+        val rows = ArrayList<PermRow>()
+        rows.add(PermRow("notif", "اعلان‌ها", "اطلاع‌رسانی سرویس‌ها و پیام‌های چت", if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()))
+        rows.add(PermRow("mic", "میکروفون", "ارسال پیام صوتی در چت", listOf(Manifest.permission.RECORD_AUDIO)))
+        rows.add(PermRow("loc", "موقعیت مکانی", "نمایش موقعیت روی نقشه", listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)))
+        rows.add(PermRow("cam", "دوربین", "ثبت عکس دستگاه و ارسال در چت", listOf(Manifest.permission.CAMERA)))
+        if (Build.VERSION.SDK_INT <= 28) {
+            rows.add(PermRow("storage", "ذخیرهٔ فایل", "ذخیرهٔ خروجی‌ها و گزارش‌ها", listOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)))
+        }
+        return rows
+    }
+
+    private fun rowGranted(row: PermRow): Boolean {
+        if (row.perms.isEmpty()) return true
+        return row.perms.all {
+            checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    /** اگر دسترسیِ لازمِ فعال‌نشده باشد → صفحهٔ گیت روی WebView می‌نشیند */
+    private fun maybeShowPermissionGate() {
+        try {
+            val missing = permRows().filter { !rowGranted(it) }
+            if (missing.isEmpty()) return
+            val root = findViewById<android.widget.FrameLayout>(R.id.root) ?: return
+            val dp = resources.displayMetrics.density
+            fun dpx(v: Int) = (v * dp).roundToInt()
+
+            val scroll = ScrollView(this)
+            scroll.id = View.generateViewId()
+            scroll.setBackgroundColor(Color.parseColor("#0f172a"))
+            scroll.isFillViewport = true
+            val card = LinearLayout(this)
+            card.orientation = LinearLayout.VERTICAL
+            card.setPadding(dpx(20), dpx(28), dpx(20), dpx(28))
+            scroll.addView(card)
+
+            val title = TextView(this)
+            title.text = "بررسی دسترسی‌های برنامه"
+            title.textSize = 19f
+            title.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            title.setTextColor(0xffe2e8f0.toInt())
+            card.addView(title)
+            val sub = TextView(this)
+            sub.text = "برای کارکرد کامل (اعلان‌ها، چت صوتی، نقشه و ذخیرهٔ فایل) این دسترسی‌ها را فعال کنید. پس از فعال‌سازی، برنامه باز می‌شود."
+            sub.textSize = 13.5f
+            sub.setTextColor(0xff94a3b8.toInt())
+            sub.setPadding(0, dpx(6), 0, dpx(16))
+            card.addView(sub)
+
+            val statusViews = HashMap<String, TextView>()
+            for (row in permRows()) {
+                val line = LinearLayout(this)
+                line.orientation = LinearLayout.HORIZONTAL
+                line.setPadding(0, dpx(10), 0, dpx(10))
+                val col = LinearLayout(this)
+                col.orientation = LinearLayout.VERTICAL
+                val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                val name = TextView(this)
+                name.text = row.label
+                name.textSize = 15f
+                name.setTextColor(0xffe2e8f0.toInt())
+                col.addView(name)
+                val desc = TextView(this)
+                desc.text = row.desc
+                desc.textSize = 12f
+                desc.setTextColor(0xff94a3b8.toInt())
+                col.addView(desc)
+                line.addView(col, lp)
+                val st = TextView(this)
+                st.textSize = 13f
+                st.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                statusViews[row.key] = st
+                line.addView(st)
+                card.addView(line)
+            }
+
+            fun refreshStatuses() {
+                for (row in permRows()) {
+                    val tv = statusViews[row.key] ?: continue
+                    if (rowGranted(row)) {
+                        tv.text = "فعال ✓"
+                        tv.setTextColor(0xff34d399.toInt())
+                    } else {
+                        tv.text = "غیرفعال"
+                        tv.setTextColor(0xfffbbf24.toInt())
+                    }
+                }
+            }
+            refreshStatuses()
+
+            val btnEnable = Button(this)
+            btnEnable.text = "فعال‌سازی همه دسترسی‌ها"
+            btnEnable.setTextColor(0xffffffff.toInt())
+            btnEnable.background?.setTint(0xFF2563EB.toInt())
+            btnEnable.setPadding(0, dpx(12), 0, dpx(12))
+            val blp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            blp.topMargin = dpx(18)
+            card.addView(btnEnable, blp)
+            btnEnable.setOnClickListener {
+                val need = ArrayList<String>()
+                for (row in permRows()) if (!rowGranted(row)) need.addAll(row.perms)
+                if (need.isEmpty()) { dismissGate() ; return@setOnClickListener }
+                try { gatePermLauncher.launch(need.toTypedArray()) } catch (_: Exception) {}
+            }
+
+            val btnSettings = Button(this)
+            btnSettings.text = "فعال‌سازی از تنظیمات برنامه"
+            btnSettings.setTextColor(0xff93c5fd.toInt())
+            btnSettings.setPadding(0, dpx(10), 0, dpx(10))
+            card.addView(btnSettings, blp)
+            btnSettings.setOnClickListener {
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + packageName)))
+                } catch (_: Exception) {}
+            }
+
+            val btnSkip = Button(this)
+            btnSkip.text = "ادامه بدون فعال‌سازی"
+            btnSkip.setTextColor(0xff94a3b8.toInt())
+            btnSkip.setPadding(0, dpx(8), 0, dpx(8))
+            card.addView(btnSkip, blp)
+            btnSkip.setOnClickListener { dismissGate() }
+
+            root.addView(scroll, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+            gateView = scroll
+        } catch (_: Exception) { /* fail-soft — برنامه بدون گیت هم باز می‌شود */ }
+    }
+
+    private fun dismissGate() {
+        try {
+            gateView?.let { (it.parent as? android.widget.FrameLayout)?.removeView(it) }
+        } catch (_: Exception) {}
+        gateView = null
+        /* اگر نوتیفی منتظر ناوبری باشد، حالا که گیت بسته شد اعمال می‌شود */
+        applyPendingNotifUrl()
+    }
+
+    private val gatePermLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+        /* پس از پاسخ سیستم، وضعیت‌ها تازه و اگر همه فعال شد خودکار بسته می‌شود */
+        try {
+            val missing = permRows().filter { !rowGranted(it) }
+            if (missing.isEmpty()) {
+                android.os.Handler(Looper.getMainLooper()).postDelayed({ dismissGate() }, 400)
+            } else if (gateView != null) {
+                val anyHardDenied = missing.any { row ->
+                    row.perms.any { p -> !shouldShowRequestPermissionRationale(p) }
+                }
+                if (anyHardDenied) {
+                    Toast.makeText(this, "برخی دسترسی‌ها رد شده‌اند — از «فعال‌سازی از تنظیمات برنامه» آن‌ها را روشن کنید", Toast.LENGTH_LONG).show()
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    // ═════════════════════ v2.11.3 — دیپ‌لینک نوتیف (درخواست ۲) ═════════════════════
+    /** URL ناوبری از intent اعلان (extra یا data app://sahand/open) خوانده می‌شود */
+    private fun readNotifNavIntent(intent: Intent?) {
+        try {
+            if (intent == null) return
+            var url = intent.getStringExtra("notif_url")
+            if (url.isNullOrBlank() && intent.data != null) {
+                val d = intent.data
+                if (d?.scheme == "app" && d.host == "sahand") url = d.getQueryParameter("url")
+            }
+            if (!url.isNullOrBlank() && url != "/") pendingNotifUrl = url
+        } catch (_: Exception) {}
+    }
+
+    /** ناوبری به URL اعلان — پس از آماده شدن صفحه اعمال می‌شود */
+    private fun applyPendingNotifUrl() {
+        val url = pendingNotifUrl ?: return
+        pendingNotifUrl = null
+        try {
+            val full = if (url.startsWith("http")) url else serverUrl.trimEnd('/') + url
+            /* اگر همین صفحه است فقط تمرکز؛ در غیر این صورت آدرس کامل با پارامتر
+             * page= بارگذاری می‌شود (روتر پنل در boot دیپ‌لینک را می‌فهمد) */
+            if (web.url != full) web.loadUrl(full)
+        } catch (_: Exception) {}
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readNotifNavIntent(intent)
+        /* اپ از قبل باز است → بلافاصله ناوبری کن (بدون گیت) */
+        if (gateView == null) applyPendingNotifUrl()
     }
 
     // ═════════════════════ بروزرسانی خودکار ═════════════════════
@@ -824,6 +1133,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        /** v2.11.3 — پیام خطای بومی وقتی استخراج blob ممکن نیست */
+        @android.webkit.JavascriptInterface
+        fun saveFailed() {
+            runOnUiThread {
+                Toast.makeText(this@MainActivity, R.string.save_failed, Toast.LENGTH_LONG).show()
+            }
+        }
+
         @android.webkit.JavascriptInterface
         fun retry() {
             runOnUiThread {
@@ -1057,6 +1374,12 @@ return a?JSON.stringify({panel:(a.state&&a.state.panel)||'',techId:(a.state&&a.s
                     .put("osVersion", "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
                     .put("appVersion", BuildConfig.VERSION_NAME)
                     .put("role", role)
+                /* v2.11.4 — توکن FCM (اگر راه‌اندازی شده) همراه تپ قلب به
+                 * سرور لایسنس هم می‌رود تا دستگاه در LM هم پوش بگیرد. */
+                try {
+                    val fcmTok = PushClient.token(this@MainActivity)
+                    if (fcmTok.isNotBlank()) payload.put("fcmToken", fcmTok)
+                } catch (_: Exception) { /* اختیاری */ }
                 /* v2.11.2 — مشخصات جامع گوشی/برنامه برای «جزئیات دستگاه» در پنل لایسنس */
                 try {
                     val dm = resources.displayMetrics
@@ -1136,7 +1459,15 @@ return a?JSON.stringify({panel:(a.state&&a.state.panel)||'',techId:(a.state&&a.s
     }
 
     // ═════════════════════ launchers مجوزها ═════════════════════
-    private val geoPermission: ActivityResultLauncher<String> = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val geoPermission: ActivityResultLauncher<String> = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val cb = pendingGeoCallback
+        val origin = pendingGeoOrigin
+        pendingGeoCallback = null
+        pendingGeoOrigin = null
+        if (cb != null && origin != null) {
+            cb.invoke(origin, granted, false)
+        }
+    }
     private val storagePermission: ActivityResultLauncher<String> = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) Toast.makeText(this, R.string.storage_denied, Toast.LENGTH_LONG).show()
     }

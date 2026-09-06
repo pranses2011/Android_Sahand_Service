@@ -14,8 +14,8 @@ android {
         applicationId = "com.sahandservice.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 13
-        versionName = "2.11.2"
+        versionCode = 15
+        versionName = "2.11.4"
     }
 
     /* v2.11.0 — دو نسخهٔ اپ: نمایندگی و سرویس‌کار (مطابق v2.10.0 قبلی) */
@@ -69,6 +69,10 @@ android {
 }
 
 dependencies {
+    /* v2.11.4 — اعلان پوش FCM: مقداردهی در زمان اجرا (PushClient) —
+     * بدون پلاگین google-services و بدون google-services.json؛
+     * پیکربندی از پنل (LM) گرفته می‌شود. */
+    implementation("com.google.firebase:firebase-messaging:24.1.0")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.2")

@@ -11,3 +11,4 @@ captures/
 # v2.11.2 — کلید امضا هرگز در گیت نیست (بستهٔ امنیتی: Sahand_Security_Package.zip)
 keystore/SahandService-release.keystore
 keystore/*.jks.password
+keystore/SahandService-release.keystore

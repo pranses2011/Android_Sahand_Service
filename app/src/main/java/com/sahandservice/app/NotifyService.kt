@@ -62,9 +62,16 @@ class NotifyService : Service() {
     private val pollTask = object : Runnable {
         override fun run() {
             try { pollOnce() } catch (_: Exception) {}
+            /* v2.11.4 — راه‌اندازی/تازه‌سازی پوش FCM هر ~۱۰ دقیقه (fail-soft) —
+             * حتی وقتی Activity بسته است؛ سرویس همیشه زنده است. */
+            try {
+                pollCount++
+                if (pollCount % 10 == 1) PushClient.ensureSetup(this@NotifyService)
+            } catch (_: Exception) { /* بی‌اثر */ }
             handler.postDelayed(this, POLL_INTERVAL_MS)
         }
     }
+    private var pollCount = 0
 
     override fun onCreate() {
         super.onCreate()
