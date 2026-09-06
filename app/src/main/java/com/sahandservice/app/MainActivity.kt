@@ -102,6 +102,10 @@ class MainActivity : AppCompatActivity() {
     private var gateView: ScrollView? = null
     private var pendingNotifUrl: String? = null
 
+    // ── v2.11.5 — تکه‌های انتقال فایل (item 4) + شروع سرد → داشبورد (item 22) ──
+    private val saveChunks = sortedMapOf<Int, String>()
+    private var coldStartNavDone = false
+
     // ── بروزرسانی خودکار ──
     private val versionCheckHandler = Handler(Looper.getMainLooper())
     private val versionCheckTask = object : Runnable {
@@ -262,6 +266,18 @@ class MainActivity : AppCompatActivity() {
                 try { web.settings.cacheMode = WebSettings.LOAD_DEFAULT } catch (_: Exception) {}
                 if (!pageError) {
                     injectDownloadHook()
+                    /* v2.11.5 (item 22) — شروع سرد اپ همیشه با داشبورد باز می‌شود
+                     * («در هنگام ورود به پنل همیشه داشبورد را باز کند») — فقط یک
+                     * بار در هر اجرای اپ؛ رفرش‌های درون‌صفحه تأثیر نمی‌گیرند. */
+                    if (!coldStartNavDone) {
+                        coldStartNavDone = true
+                        try {
+                            web.evaluateJavascript(
+                                "(function(){try{var a=JSON.parse(localStorage.getItem('asm-auth')||'null');" +
+                                "if(a&&a.state&&a.state.userId&&window.__sahandSetPageRaw){" +
+                                "window.__sahandSetPageRaw('dashboard',{});}}catch(e){}})()", null)
+                        } catch (_: Exception) {}
+                    }
                     // v2.11.0 — poll اعلان‌ها با هر بارگذاری صفحه تازه می‌شود
                     startBackgroundNotifyPolling()
                     // v2.11.1 — ثبت دستگاه در سرور لایسنس (مدیریت لایسنس ← دستگاه‌ها)
@@ -418,10 +434,29 @@ class MainActivity : AppCompatActivity() {
       var fr = new FileReader();
       fr.onloadend = function(){
         var b64 = String(fr.result).split(',')[1] || '';
-        SahandFiles.saveBase64(name || 'sahand-export.bin', blob.type || 'application/octet-stream', b64);
+        var nm = name || 'sahand-export.bin';
+        var mm = blob.type || 'application/octet-stream';
+        /* v2.11.5 — انتقال تکه‌ای (item 4): پل JS روی رشته‌های چند-مگابایتی
+         * بی‌صدا می‌میرد → «هیچ پیام، هیچ فایل». تکه‌های ۳۰۰KB. */
+        if (b64.length <= 300000) {
+          try { SahandFiles.saveBase64(nm, mm, b64); } catch (eD) {
+            try { SahandFiles.saveFailed(); } catch (eD2) {}
+          }
+        } else {
+          var total = Math.ceil(b64.length / 300000);
+          for (var ci = 0; ci < total; ci++) {
+            (function (idx) {
+              setTimeout(function () {
+                try { SahandFiles.saveChunk(nm, mm, idx, total, b64.substr(idx * 300000, 300000)); }
+                catch (eC) { try { SahandFiles.saveFailed(); } catch (eC2) {} }
+              }, idx * 40);
+            })(ci);
+          }
+        }
       };
+      fr.onerror = function(){ try { SahandFiles.saveFailed(); } catch (eR) {} };
       fr.readAsDataURL(blob);
-    } catch(e){}
+    } catch(e){ try { SahandFiles.saveFailed(); } catch (eS) {} }
   }
   function __sahandRouteAnchor(a){
     try {
@@ -646,10 +681,21 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT <= 28) {
             rows.add(PermRow("storage", "ذخیرهٔ فایل", "ذخیرهٔ خروجی‌ها و گزارش‌ها", listOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)))
         }
+        /* v2.11.5 — معافیت از بهینه‌سازی باتری (item 5/6): قاتل شمارهٔ یکِ
+         * اعلان‌های پس‌زمینه روی گوشی‌های ایرانی (شیائومی/هواوی/سامسونگ)
+         * این است که سرویس اعلان را می‌کشند. */
+        rows.add(PermRow("battery", "فعال‌ماندن در پس‌زمینه", "دریافت اعلان‌ها و پیام‌ها وقتی برنامه بسته است", emptyList()))
         return rows
     }
 
     private fun rowGranted(row: PermRow): Boolean {
+        /* v2.11.5 — ردیف باتری: مجوز runtime نیست؛ وضعیت PowerManager چک می‌شود */
+        if (row.key == "battery") {
+            return try {
+                val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                pm.isIgnoringBatteryOptimizations(packageName)
+            } catch (_: Exception) { true }
+        }
         if (row.perms.isEmpty()) return true
         return row.perms.all {
             checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
@@ -737,6 +783,16 @@ class MainActivity : AppCompatActivity() {
             blp.topMargin = dpx(18)
             card.addView(btnEnable, blp)
             btnEnable.setOnClickListener {
+                /* v2.11.5 — ابتدا معافیت باتری (intent سیستمی، همراه بقیه) */
+                try {
+                    val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                    if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                        startActivity(Intent(
+                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:$packageName")
+                        ))
+                    }
+                } catch (_: Exception) { /* برخی ROMها این intent را ندارند */ }
                 val need = ArrayList<String>()
                 for (row in permRows()) if (!rowGranted(row)) need.addAll(row.perms)
                 if (need.isEmpty()) { dismissGate() ; return@setOnClickListener }
@@ -752,6 +808,29 @@ class MainActivity : AppCompatActivity() {
                 try {
                     startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + packageName)))
                 } catch (_: Exception) {}
+            }
+
+            /* v2.11.5 — تست اعلان (item 5): کاربر همین‌جا می‌تواند مطمئن شود
+             * مجوز و کانال اعلان واقعاً کار می‌کنند — بدون انتظار برای رویداد واقعی */
+            val btnTestNotif = Button(this)
+            btnTestNotif.text = "تست اعلان (بررسی نمایش پیام‌ها)"
+            btnTestNotif.setTextColor(0xff93c5fd.toInt())
+            btnTestNotif.setPadding(0, dpx(10), 0, dpx(10))
+            card.addView(btnTestNotif, blp)
+            btnTestNotif.setOnClickListener {
+                val shown = try {
+                    NotificationHub.post(
+                        this, "تست اعلان سهند سرویس",
+                        "اگر این پیام را می‌بینید، اعلان‌ها فعال و سالم هستند ✓",
+                        "test-notif", "/"
+                    )
+                } catch (_: Exception) { false }
+                Toast.makeText(
+                    this,
+                    if (shown) "اعلان تست ارسال شد — نوار بالای گوشی را ببینید"
+                    else "اعلان نمایش داده نشد — مجوز «اعلان‌ها» را از تنظیمات فعال کنید",
+                    Toast.LENGTH_LONG
+                ).show()
             }
 
             val btnSkip = Button(this)
@@ -891,6 +970,13 @@ class MainActivity : AppCompatActivity() {
             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
             android.view.ViewGroup.LayoutParams.WRAP_CONTENT
         )
+        scroll.isScrollbarFadingEnabled = false
+        /* v2.11.5 — ارتفاع ماکزیمم فوری (item 18): قبلاً فقط بعد از layout
+         * محدود می‌شد و در بعضی دستگاه‌ها اسکرول کار نمی‌کرد؛ حالا در لحظهٔ
+         * show اعمال می‌شود + پدینگ داخلی برای راحتی لمس. */
+        val maxH0 = (resources.displayMetrics.heightPixels * 0.6).toInt()
+        tv.setPadding(dp16, dp16 / 2, dp16, dp16 * 2)
+        scroll.setPadding(0, 0, 0, dp16 / 2)
         scroll.viewTreeObserver.addOnGlobalLayoutListener {
             val maxH = (resources.displayMetrics.heightPixels * 0.6).toInt()
             if (scroll.height > maxH) {
@@ -898,6 +984,7 @@ class MainActivity : AppCompatActivity() {
                 scroll.requestLayout()
             }
         }
+        scroll.post { if (scroll.height > maxH0) { scroll.layoutParams.height = maxH0; scroll.requestLayout() } }
         AlertDialog.Builder(this, R.style.Theme_Sahand_Dialog)
             .setTitle(getString(R.string.update_title))
             .setView(scroll)
@@ -1112,6 +1199,25 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread { saveDirectFile(name, mime, bytes) }
             } catch (_: Exception) {
                 runOnUiThread { Toast.makeText(this@MainActivity, R.string.save_failed, Toast.LENGTH_SHORT).show() }
+            }
+        }
+
+        /* v2.11.5 — انتقال تکه‌ای (item 4): رشته‌های چند-مگابایتی از پل JS
+         * به‌صورت بی‌صدا شکست می‌خوردند (هیچ پیام و هیچ فایل). حالا JS
+         * base64 را در تکه‌های ۳۰۰KB می‌فرستد و اینجا مونتاژ می‌شود. */
+        @android.webkit.JavascriptInterface
+        fun saveChunk(name: String, mime: String, index: Int, total: Int, chunk: String) {
+            try {
+                if (index == 0) saveChunks.clear()
+                saveChunks[index] = chunk
+                if (index + 1 >= total) {
+                    val joined = saveChunks.values.joinToString("")
+                    saveChunks.clear()
+                    saveBase64(name, mime, joined)
+                }
+            } catch (e: Exception) {
+                saveChunks.clear()
+                runOnUiThread { Toast.makeText(this@MainActivity, R.string.save_failed, Toast.LENGTH_LONG).show() }
             }
         }
 

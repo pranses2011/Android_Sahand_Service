@@ -153,6 +153,12 @@ class NotifyService : Service() {
         } catch (_: Exception) { null }
     }
 
+    /** v2.11.5 — تبدیل ارقام به فارسی برای متن اعلان‌ها */
+    private fun faDigits(n: Int): String {
+        val FA = charArrayOf('۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹')
+        return n.toString().map { if (it in '0'..'9') FA[it - '0'] else it }.joinToString("")
+    }
+
     private fun pollOnce() {
         val base = serverUrl()
         if (base.isBlank()) return
@@ -177,6 +183,29 @@ class NotifyService : Service() {
                         else "$delta پیام خوانده‌نشده دارید — برای مشاهده چت را باز کنید",
                         "chat-unread-bg", "/"
                     )
+                }
+            } catch (_: Exception) {}
+        }
+
+        /* v2.11.5 — ۲′) پاسخ مدیر سامانه به انتقادات/پیشنهادها (item 5):
+         * همان بج خوانده‌نشده‌ای که منوی «انتقادات و پیشنهادات» پنل نشان
+         * می‌دهد؛ اگر زیاد شد → اعلان (پنل cPanel/VPS هر دو ?badge=1 دارند). */
+        val fbBody = fetchBody("/api/feedback?badge=1")
+        if (fbBody != null) {
+            try {
+                val j = JSONObject(fbBody)
+                if (j.optBoolean("ok", false)) {
+                    val cnt = j.optInt("unread", 0)
+                    val delta = NotificationHub.takeFbDelta(cnt)
+                    if (delta > 0) {
+                        NotificationHub.post(
+                            this,
+                            "پاسخ جدید مدیر سامانه",
+                            if (delta == 1) "به انتقاد/پیشنهاد شما پاسخ داده شد — برای مشاهده، بخش «انتقادات و پیشنهادات» را باز کنید"
+                            else faDigits(delta) + " پاسخ خوانده‌نشده دارید — بخش «انتقادات و پیشنهادات» را باز کنید",
+                            "feedback-reply", "/?page=feedback"
+                        )
+                    }
                 }
             } catch (_: Exception) {}
         }

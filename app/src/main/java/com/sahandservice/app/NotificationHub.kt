@@ -37,6 +37,7 @@ object NotificationHub {
     /* ── وضعیت مشترک (بین Activity و Service) ── */
     var chatUnread: Int = -1
     var notifUnread: Int = -1
+    var fbUnread: Int = -1   /* v2.11.5 — پاسخ‌های خوانده‌نشدهٔ مدیر سامانه */
     var userPanel: String? = null   // "agency" | "technician"
     var techId: String? = null
 
@@ -67,9 +68,23 @@ object NotificationHub {
     }
 
     @Synchronized
+    fun takeFbDelta(count: Int): Int {
+        val prev = fbUnread
+        val delta = when {
+            count <= 0 -> 0
+            prev < 0 -> 0   /* نخستین poll فقط خط پایه — اعلان تکراری نمی‌دهد */
+            count > prev -> count - prev
+            else -> 0
+        }
+        fbUnread = count
+        return delta
+    }
+
+    @Synchronized
     fun reset() {
         chatUnread = -1
         notifUnread = -1
+        fbUnread = -1
     }
 
     /* ── کانال‌ها ── */
