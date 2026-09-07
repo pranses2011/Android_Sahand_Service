@@ -14,8 +14,8 @@ android {
         applicationId = "com.sahandservice.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 19
-        versionName = "2.11.8"
+        versionCode = 20
+        versionName = "2.12.0"
     }
 
     /* v2.11.0 — دو نسخهٔ اپ: نمایندگی و سرویس‌کار (مطابق v2.10.0 قبلی) */
@@ -35,14 +35,14 @@ android {
         }
     }
 
-    val keystoreFile = rootProject.file("keystore/SahandService-release.keystore")
+    val keystoreFile = rootProject.file("keystore/sahand-release.jks") /* v2.12.0 — نام واقعی فایل کلید */
     signingConfigs {
         create("release") {
             if (keystoreFile.exists()) {
                 storeFile = keystoreFile
-                storePassword = System.getenv("KS_PASS") ?: "sahand-service-2026"
-                keyAlias = System.getenv("KS_ALIAS") ?: "sahandservice"
-                keyPassword = System.getenv("KS_KEYPASS") ?: "sahand-service-2026"
+                storePassword = System.getenv("KS_PASS") ?: "Sahand@2026"
+                keyAlias = System.getenv("KS_ALIAS") ?: "sahand"
+                keyPassword = System.getenv("KS_KEYPASS") ?: "Sahand@2026"
                 /* v2.11.5 — Play Protect (item 1): همهٔ طرح‌های امضا روشن —
                  * بعضی دستگاه‌ها/Play Protect روی APKهای فقط-V2 هشدار می‌دهند */
                 enableV1Signing = true

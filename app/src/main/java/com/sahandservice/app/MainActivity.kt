@@ -948,48 +948,234 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    /** v2.11.0 — دیالوگ بروزرسانی با فهرست تغییرات اسکرول‌شونده (رفع باگ «غیرقابل اسکرول») */
+    /** v2.12.0 (درخواست ۳) — دیالوگ بروزرسانی بازطراحی‌شده:
+     *  • سربرگ گرادیانی با آیکون بزرگ + عنوان
+     *  • چیپ نسخهٔ فعلی → نسخهٔ جدید (فلش)
+     *  • فهرست تغییرات: هر مورد در کارت مستقل با آیکونِ موضوعی (رفع باگ/
+     *    اعلان/ذخیره/امنیت/…) — خوانا و اسکرول‌شونده (حداکثر ۵۵٪ صفحه)
+     *  • دکمه‌های مدرن: دکمهٔ اصلی پررنگ گرادیانی + دکمهٔ «بعداً» کم‌رنگ */
     private fun showUpdateDialog(version: String, @Suppress("UNUSED_PARAMETER") code: Int, notes: ArrayList<String>, apkUrl: String) {
-        val dp16 = (16 * resources.displayMetrics.density).roundToInt()
+        val d = resources.displayMetrics.density
+        fun dp(v: Int) = (v * d).roundToInt()
+        val curVersion = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" } catch (_: Exception) { "?" }
+
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setBackgroundColor(0xFF0F172A.toInt())
+
+        /* ── سربرگ گرادیانی ── */
+        val header = LinearLayout(this)
+        header.orientation = LinearLayout.VERTICAL
+        header.setPadding(dp(20), dp(22), dp(20), dp(18))
+        val headerBg = android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+            intArrayOf(0xFF0EA5E9.toInt(), 0xFF6366F1.toInt(), 0xFF8B5CF6.toInt())
+        )
+        header.background = headerBg
+        val hIcon = TextView(this)
+        hIcon.text = "⬆️"
+        hIcon.textSize = 34f
+        hIcon.setPadding(0, 0, 0, dp(6))
+        header.addView(hIcon)
+        val hTitle = TextView(this)
+        hTitle.text = getString(R.string.update_title)
+        hTitle.textSize = 18f
+        hTitle.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        hTitle.setTextColor(0xFFFFFFFF.toInt())
+        header.addView(hTitle)
+        val hSub = TextView(this)
+        hSub.text = "برای دسترسی به قابلیت‌های جدید و رفع اشکالات، برنامه را به‌روز کنید"
+        hSub.textSize = 12.5f
+        hSub.setTextColor(0xDDFFFFFF.toInt())
+        hSub.setPadding(0, dp(4), 0, 0)
+        header.addView(hSub)
+
+        /* ── ردیف نسخه: فعلی → جدید ── */
+        val verRow = LinearLayout(this)
+        verRow.orientation = LinearLayout.HORIZONTAL
+        verRow.gravity = android.view.Gravity.CENTER_VERTICAL
+        verRow.setPadding(dp(20), dp(14), dp(20), dp(6))
+        fun verChip(label: String, value: String, bg: Int, fg: Int): TextView {
+            val t = TextView(this)
+            t.text = "$label v$value"
+            t.textSize = 13f
+            t.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            t.setTextColor(fg)
+            t.setPadding(dp(12), dp(6), dp(12), dp(6))
+            val chip = android.graphics.drawable.GradientDrawable()
+            chip.setColor(bg)
+            chip.cornerRadius = dp(10).toFloat()
+            t.background = chip
+            val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            t.layoutParams = lp
+            t.gravity = android.view.Gravity.CENTER
+            return t
+        }
+        val oldChip = verChip("فعلی", curVersion, 0xFF334155.toInt(), 0xFFCBD5E1.toInt())
+        val arrow = TextView(this)
+        arrow.text = "→"
+        arrow.textSize = 16f
+        arrow.setTextColor(0xFF94A3B8.toInt())
+        arrow.setPadding(dp(8), 0, dp(8), 0)
+        val newChip = verChip("جدید", version, 0xFF0EA5E9.toInt(), 0xFFFFFFFF.toInt())
+        verRow.addView(oldChip)
+        verRow.addView(arrow)
+        verRow.addView(newChip)
+        val verWrap = LinearLayout(this)
+        verWrap.orientation = LinearLayout.VERTICAL
+        verWrap.addView(header)
+        verWrap.addView(verRow)
+        root.addView(verWrap)
+
+        /* ── عنوان «چه چیزهایی جدید است» ── */
+        val chTitle = TextView(this)
+        chTitle.text = "✨ چه چیزهایی جدید است؟"
+        chTitle.textSize = 13.5f
+        chTitle.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        chTitle.setTextColor(0xFF38BDF8.toInt())
+        chTitle.setPadding(dp(20), dp(8), dp(20), dp(2))
+        root.addView(chTitle)
+
+        /* ── فهرست تغییرات: هر مورد یک کارت با آیکون موضوعی ── */
         val scroll = ScrollView(this)
         scroll.isVerticalScrollBarEnabled = true
-        val tv = TextView(this)
-        val sb = StringBuilder()
-        sb.append(getString(R.string.update_current, packageManager.getPackageInfo(packageName, 0).versionName)).append("\n")
-        sb.append(getString(R.string.update_new, version)).append("\n\n")
-        if (notes.isEmpty()) sb.append("—")
-        else notes.filter { it.isNotBlank() }.forEach { sb.append("• ").append(it).append("\n") }
-        tv.text = sb.toString()
-        tv.setPadding(dp16, dp16 / 2, dp16, dp16 / 2)
-        tv.textSize = 14f
-        tv.setTextColor(0xffe2e8f0.toInt())
-        // v2.11.0 — ارتفاع حداکثر ۶۰٪ صفحه → همیشه اسکرول‌شونده
-        scroll.addView(tv)
-        scroll.layoutParams = android.view.ViewGroup.LayoutParams(
-            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-        )
-        scroll.isScrollbarFadingEnabled = false
-        /* v2.11.5 — ارتفاع ماکزیمم فوری (item 18): قبلاً فقط بعد از layout
-         * محدود می‌شد و در بعضی دستگاه‌ها اسکرول کار نمی‌کرد؛ حالا در لحظهٔ
-         * show اعمال می‌شود + پدینگ داخلی برای راحتی لمس. */
-        val maxH0 = (resources.displayMetrics.heightPixels * 0.6).toInt()
-        tv.setPadding(dp16, dp16 / 2, dp16, dp16 * 2)
-        scroll.setPadding(0, 0, 0, dp16 / 2)
+        val list = LinearLayout(this)
+        list.orientation = LinearLayout.VERTICAL
+        list.setPadding(dp(16), dp(6), dp(16), dp(4))
+        val cleanNotes = notes.filter { it.isNotBlank() }
+        if (cleanNotes.isEmpty()) {
+            val empty = TextView(this)
+            empty.text = "—"
+            empty.textSize = 13f
+            empty.setTextColor(0xFF94A3B8.toInt())
+            empty.setPadding(dp(6), dp(10), dp(6), dp(10))
+            list.addView(empty)
+        } else {
+            for (note in cleanNotes) {
+                list.addView(updateNoteRow(note) { v -> (v * d).roundToInt() })
+            }
+        }
+        scroll.addView(list)
+        val maxH = (resources.displayMetrics.heightPixels * 0.55).toInt()
+        scroll.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         scroll.viewTreeObserver.addOnGlobalLayoutListener {
-            val maxH = (resources.displayMetrics.heightPixels * 0.6).toInt()
             if (scroll.height > maxH) {
                 scroll.layoutParams.height = maxH
                 scroll.requestLayout()
             }
         }
-        scroll.post { if (scroll.height > maxH0) { scroll.layoutParams.height = maxH0; scroll.requestLayout() } }
-        AlertDialog.Builder(this, R.style.Theme_Sahand_Dialog)
-            .setTitle(getString(R.string.update_title))
-            .setView(scroll)
-            .setPositiveButton(R.string.update_download) { _, _ -> downloadAndInstallUpdate(apkUrl, version) }
-            .setNeutralButton(R.string.update_later, null)
-            .show()
+        root.addView(scroll)
+
+        /* ── دکمه‌های مدرن ── */
+        val btnRow = LinearLayout(this)
+        btnRow.orientation = LinearLayout.HORIZONTAL
+        btnRow.setPadding(dp(16), dp(10), dp(16), dp(16))
+        btnRow.gravity = android.view.Gravity.CENTER_VERTICAL
+
+        val laterBtn = TextView(this)
+        laterBtn.text = getString(R.string.update_later)
+        laterBtn.textSize = 14f
+        laterBtn.setTextColor(0xFF94A3B8.toInt())
+        laterBtn.gravity = android.view.Gravity.CENTER
+        laterBtn.setPadding(dp(14), dp(12), dp(14), dp(12))
+        val laterBg = android.graphics.drawable.GradientDrawable()
+        laterBg.setColor(0xFF1E293B.toInt())
+        laterBg.cornerRadius = dp(14).toFloat()
+        laterBg.setStroke(dp(1), 0xFF334155.toInt())
+        laterBtn.background = laterBg
+        laterBtn.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginEnd = dp(8)
+        }
+        btnRow.addView(laterBtn)
+
+        val dlBtn = TextView(this)
+        dlBtn.text = "⬇  " + getString(R.string.update_download)
+        dlBtn.textSize = 14.5f
+        dlBtn.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        dlBtn.setTextColor(0xFFFFFFFF.toInt())
+        dlBtn.gravity = android.view.Gravity.CENTER
+        dlBtn.setPadding(dp(14), dp(13), dp(14), dp(13))
+        val dlBg = android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+            intArrayOf(0xFF0EA5E9.toInt(), 0xFF6366F1.toInt())
+        )
+        dlBg.cornerRadius = dp(14).toFloat()
+        dlBtn.background = dlBg
+        dlBtn.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.7f)
+        btnRow.addView(dlBtn)
+
+        root.addView(btnRow)
+
+        /* دیالوگ بدون قاب پیش‌فرض — نمای کامل سفارشی */
+        val dlg = AlertDialog.Builder(this, R.style.Theme_Sahand_Dialog)
+            .setView(root)
+            .create()
+        dlg.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        var downloaded = false
+        dlBtn.setOnClickListener {
+            if (!downloaded) {
+                downloaded = true
+                dlBtn.text = "در حال شروع دانلود…"
+            }
+            downloadAndInstallUpdate(apkUrl, version)
+        }
+        laterBtn.setOnClickListener { dlg.dismiss() }
+        dlg.show()
+    }
+
+    /** v2.12.0 — سطر تغییرات: آیکون موضوعی + متن، داخل کارت */
+    private fun updateNoteRow(note: String, dp: (Int) -> Int): android.view.View {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.START
+        row.setPadding(dp(10), dp(8), dp(10), dp(8))
+        val card = android.graphics.drawable.GradientDrawable()
+        card.setColor(0xFF1E293B.toInt())
+        card.cornerRadius = dp(12).toFloat()
+        card.setStroke(dp(1), 0xFF273449.toInt())
+        row.background = card
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        lp.bottomMargin = dp(6)
+        row.layoutParams = lp
+
+        /* آیکون موضوعی بر اساس کلیدواژه‌ها */
+        val (emoji, tint) = noteIconFor(note)
+        val iconBox = TextView(this)
+        iconBox.text = emoji
+        iconBox.textSize = 15f
+        iconBox.gravity = android.view.Gravity.CENTER
+        val box = android.graphics.drawable.GradientDrawable()
+        box.setColor(tint)
+        box.cornerRadius = dp(10).toFloat()
+        iconBox.background = box
+        iconBox.setPadding(0, dp(6), 0, dp(6))
+        iconBox.layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(10) }
+        row.addView(iconBox)
+
+        val txt = TextView(this)
+        txt.text = note
+        txt.textSize = 13f
+        txt.setTextColor(0xFFE2E8F0.toInt())
+        txt.setLineSpacing(dp(2).toFloat(), 1f)
+        txt.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        row.addView(txt)
+        return row
+    }
+
+    /** v2.12.0 — آیکون و رنگِ موضوعی هر ردیف تغییرات */
+    private fun noteIconFor(note: String): Pair<String, Int> {
+        val n = note.trim()
+        return when {
+            Regex("رفع|باگ|خطا|مشکل|ایراد|crash|fix", RegexOption.IGNORE_CASE).containsMatchIn(n) -> "🔧" to 0x33F59E0B
+            Regex("اعلان|نوتیف|پوش|notification|push", RegexOption.IGNORE_CASE).containsMatchIn(n) -> "🔔" to 0x330EA5E9
+            Regex("ذخیره|خروجی|دانلود|export|save", RegexOption.IGNORE_CASE).containsMatchIn(n) -> "💾" to 0x3310B981
+            Regex("امنیت|محافظت|protect|امضای|security", RegexOption.IGNORE_CASE).containsMatchIn(n) -> "🛡" to 0x338B5CF6
+            Regex("چت|پیام|گفتگو|chat|پیام‌رسان", RegexOption.IGNORE_CASE).containsMatchIn(n) -> "💬" to 0x3306B6D4
+            Regex("سرعت|بهبود|بهتر|سریع|performance", RegexOption.IGNORE_CASE).containsMatchIn(n) -> "⚡" to 0x33EAB308
+            Regex("اسپلش|ظاهر|زیب|آیکون|ui|طراحی", RegexOption.IGNORE_CASE).containsMatchIn(n) -> "✨" to 0x33EC4899
+            Regex("گزارش|نمودار|داشبورد|report|chart", RegexOption.IGNORE_CASE).containsMatchIn(n) -> "📊" to 0x333B82F6
+            else -> "✨" to 0x336366F1
+        }
     }
 
     private fun downloadAndInstallUpdate(apkUrl: String, version: String) {
