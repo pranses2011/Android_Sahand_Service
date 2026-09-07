@@ -13,8 +13,11 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- v2.11.0 — برای نصب خودکار بروزرسانی ( APK دانلودشده) -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- v2.11.7 (درخواست ۱۶ — Play Protect) — REQUEST_INSTALL_PACKAGES حذف شد:
+         این مجوز یکی از اصلی‌ترین عوامل هشدار «برنامهٔ ناامن/Play Protect» هنگام
+         نصب اپ‌های کنارِ Play است. بروزرسانی اکنون با DownloadManager به پوشهٔ
+         عمومی Downloads می‌رود و کاربر از همان اعلان دانلود، نصب را ادامه می‌دهد
+         (نصب از طریق دانلودهای سیستم — بدون نیاز به مجوز ویژه برای اپ ما). -->
     <!-- v2.11.1 — سرویس پیش‌زمینهٔ اعلان‌ها (هیچ نوتیفی از دست نرود) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />

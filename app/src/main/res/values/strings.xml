@@ -42,8 +42,10 @@
     <string name="update_later">بعداً</string>
     <string name="update_no_url">آدرس فایل نصبی نسخه جدید در تنظیمات پنل ثبت نشده است</string>
     <string name="update_dl_title">دانلود نسخه %1$s</string>
-    <string name="update_dl_desc">پس از اتمام دانلود، نصب خودکار باز می‌شود</string>
+    <string name="update_dl_desc">پس از اتمام، از اعلان دانلود نصب را ادامه دهید</string>
     <string name="update_dl_started">دانلود نسخه جدید شروع شد…</string>
     <string name="update_install_failed">بازکردن نصب‌کننده ناموفق بود</string>
-    <string name="update_allow_install">برای نصب خودکار، اجازه «نصب از این منبع» را به برنامه بدهید؛ سپس دوباره «دانلود و نصب» را بزنید</string>
+    <string name="update_allow_install">برای نصب، اجازه «نصب از این منبع» را بدهید</string>
+    <!-- v2.11.7 (درخواست ۱۶ — Play Protect) — دانلود به Downloads عمومی + نصب از اعلان سیستم -->
+    <string name="update_dl_public">نسخهٔ v%1$s به پوشهٔ Downloads (دانلودها) در حال دانلود است — پس از پایان، روی اعلان «دانلود کامل شد» بزنید و نصب را ادامه دهید</string>
 </resources>

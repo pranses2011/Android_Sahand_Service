@@ -115,13 +115,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private var updateDialogShownFor = ""
-    private var pendingApkDownloadId = -1L
-    private val apkDownloadReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
-            if (id == pendingApkDownloadId && pendingApkDownloadId > 0) installDownloadedApk(id)
-        }
-    }
+    /* v2.11.7 (درخواست ۱۶) — نصب خودکار APK حذف شد (Play Protect)؛ دانلود به
+     * Downloads عمومی می‌رود و کاربر از اعلان سیستم نصب را ادامه می‌دهد. */
 
     // ═════════════════════ onCreate ═════════════════════
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -170,11 +165,6 @@ class MainActivity : AppCompatActivity() {
          * روی اعلان هنگام شروع سرد) ذخیره و پس از بارگذاری صفحه اعمال می‌شود */
         readNotifNavIntent(intent)
 
-        ContextCompat.registerReceiver(
-            this, apkDownloadReceiver,
-            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
 
         try { checkAppUpdate(false) } catch (_: Exception) {}
         versionCheckHandler.postDelayed(versionCheckTask, 60 * 1000L)
@@ -846,6 +836,17 @@ class MainActivity : AppCompatActivity() {
             gateView?.let { (it.parent as? android.widget.FrameLayout)?.removeView(it) }
         } catch (_: Exception) {}
         gateView = null
+        /* v2.11.7 (درخواست ۴) — پس از بستن گیت دسترسی‌ها، ناوبری شروع سرد
+         * دوباره اعمال می‌شود تا داشبوردِ همان پنل باز شود (سرویس‌کار →
+         * tech-dashboard). در v2.11.6 این ناوبری فقط در onPageFinished اجرا
+         * می‌شد که می‌توانست هنگام باز بودن گیت با asm-authِ هنوز-راه‌اندازی-
+         * نشده اجرا شود → «صفحه یافت نشد: dashboard» در اپ سرویس‌کار. */
+        try {
+            web.evaluateJavascript(
+                "(function(){try{var a=JSON.parse(localStorage.getItem('asm-auth')||'null');" +
+                "if(a&&a.state&&a.state.userId&&window.__sahandSetPageRaw){" +
+                "window.__sahandSetPageRaw(a.state.panel==='technician'?'tech-dashboard':'dashboard',{});}}catch(e){}})()", null)
+        } catch (_: Exception) { /* بی‌اثر */ }
         /* اگر نوتیفی منتظر ناوبری باشد، حالا که گیت بسته شد اعمال می‌شود */
         applyPendingNotifUrl()
     }
@@ -992,17 +993,10 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, R.string.update_no_url, Toast.LENGTH_LONG).show()
                 return
             }
-            if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
-                Toast.makeText(this, R.string.update_allow_install, Toast.LENGTH_LONG).show()
-                try {
-                    startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
-                } catch (_: Exception) {
-                    try {
-                        startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
-                    } catch (_: Exception) {}
-                }
-                return
-            }
+            /* v2.11.7 (درخواست ۱۶ — Play Protect) — REQUEST_INSTALL_PACKAGES حذف شد؛
+             * نصب خودکارِ داخل برنامه که عامل اصلی هشدار Play Protect بود جای خود را
+             * به دانلود در پوشهٔ عمومی Downloads (اعلان سیستمی) می‌دهد. کاربر روی
+             * اعلانِ «دانلود کامل شد» می‌زند و نصب‌کنندهٔ خود اندروید ادامه می‌دهد. */
             // آدرس نسبی → کامل با سرور
             val fullUrl = if (apkUrl.startsWith("http")) apkUrl else serverUrl.trimEnd('/') + apkUrl
             val req = DownloadManager.Request(Uri.parse(fullUrl))
@@ -1010,52 +1004,17 @@ class MainActivity : AppCompatActivity() {
             req.setDescription(getString(R.string.update_dl_desc))
             req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             req.setMimeType(APK_MIME)
-            req.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, "SahandService-update-v$version.apk")
+            req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "SahandService-update-v$version.apk")
             CookieManager.getInstance().getCookie(fullUrl)?.let { req.addRequestHeader("cookie", it) }
             req.addRequestHeader("User-Agent", web.settings.userAgentString)
             val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-            pendingApkDownloadId = dm.enqueue(req)
-            Toast.makeText(this, R.string.update_dl_started, Toast.LENGTH_SHORT).show()
+            dm.enqueue(req)
+            Toast.makeText(this, getString(R.string.update_dl_public, version), Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Toast.makeText(this, getString(R.string.download_failed) + ": " + e.message, Toast.LENGTH_LONG).show()
         }
     }
 
-    fun installDownloadedApk(id: Long) {
-        try {
-            val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-            val cursor = dm.query(DownloadManager.Query().setFilterById(id))
-            if (cursor == null || !cursor.moveToFirst()) { cursor?.close(); return }
-            if (cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) != DownloadManager.STATUS_SUCCESSFUL) {
-                cursor.close(); return
-            }
-            var uri = Uri.parse(cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI)))
-            cursor.close()
-            var file: File? = null
-            if (uri.scheme == "file") {
-                uri.path?.let { file = File(it) }
-            } else if (uri.scheme == "content") {
-                // v2.11.0 — external-files در اندروید ۱۰+ content URI برمی‌گرداند
-                try {
-                    val rel = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                    if (rel != null) {
-                        val f = File(rel, uri.lastPathSegment?.substringAfterLast('/') ?: "")
-                        if (f.exists()) file = f
-                    }
-                } catch (_: Exception) {}
-            }
-            val apkUri = if (file != null) FileProvider.getUriForFile(this, "$packageName.fileprovider", file!!) else uri
-            val intent = Intent(Intent.ACTION_VIEW)
-            intent.setDataAndType(apkUri, APK_MIME)
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-        } catch (e: Exception) {
-            Toast.makeText(this, getString(R.string.update_install_failed) + ": " + e.message, Toast.LENGTH_LONG).show()
-        }
-    }
-
-    // ═════════════════════ اعلان‌های سیستمی ═════════════════════
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < 26) return
         val mgr = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -1444,33 +1403,41 @@ return a?JSON.stringify({panel:(a.state&&a.state.panel)||'',techId:(a.state&&a.s
             box.orientation = LinearLayout.VERTICAL
             box.gravity = android.view.Gravity.CENTER
             box.setBackgroundColor(Color.parseColor("#0f172a"))
-            box.setPadding(dpx(24), dpx(24), dpx(24), dpx(24))
+            box.setPadding(dpx(24), dpx(24), dpx(24), dpx(28))
 
+            /* v2.11.7 (درخواست ۵) — آیکون و متن «تمام‌عرض» و درشت‌تر:
+             * لوگو ۱۶۴dp (تقریباً تمام عرض موبایل)، عنوان ۳۲sp، نقش ۲۰sp،
+             * نام نمایندگی ۱۶sp و شمارهٔ نسخه ۱۴sp (کوچکتر از بقیه). */
             val logo = android.widget.ImageView(this)
             logo.setImageResource(R.drawable.splash_logo)
             logo.adjustViewBounds = true
-            val lpLogo = LinearLayout.LayoutParams(dpx(104), dpx(104))
+            val lpLogo = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpx(164))
+            lpLogo.gravity = android.view.Gravity.CENTER
+            logo.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             box.addView(logo, lpLogo)
 
-            fun tv(text: String, sizeSp: Float, color: Int, bold: Boolean, topMarginDp: Int): TextView {
+            fun tv(text: String, sizeSp: Float, color: Int, bold: Boolean, topMarginDp: Int, fullWidth: Boolean = false): TextView {
                 val t = TextView(this)
                 t.text = text
                 t.textSize = sizeSp
                 t.setTextColor(color)
                 t.gravity = android.view.Gravity.CENTER
                 t.typeface = if (bold) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
-                val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                val lp = LinearLayout.LayoutParams(
+                    if (fullWidth) LinearLayout.LayoutParams.MATCH_PARENT else LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
                 lp.topMargin = dpx(topMarginDp)
                 box.addView(t, lp)
                 return t
             }
 
-            tv("سامانه", 24f, Color.WHITE, true, 14)
-            tv(if (isTech) "سرویسکاری" else "مدیریت", 16.5f, Color.parseColor("#93c5fd"), true, 2)
+            tv("سامانه", 32f, Color.WHITE, true, 18, fullWidth = true)
+            tv(if (isTech) "سرویسکاری" else "مدیریت", 20f, Color.parseColor("#93c5fd"), true, 4, fullWidth = true)
             val sp = getSharedPreferences(PREFS, 0)
             val agencyName = sp.getString("agency_title", "") ?: ""
-            if (agencyName.isNotBlank()) tv(agencyName, 14f, Color.parseColor("#cbd5e1"), false, 6)
-            tv("نسخهٔ " + BuildConfig.VERSION_NAME.replace(".", "٫"), 12f, Color.parseColor("#64748b"), false, 18)
+            if (agencyName.isNotBlank()) tv(agencyName, 16f, Color.parseColor("#cbd5e1"), false, 8, fullWidth = true)
+            tv("نسخهٔ " + BuildConfig.VERSION_NAME.replace(".", "٫"), 14f, Color.parseColor("#64748b"), false, 22, fullWidth = true)
 
             root.addView(box, android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
@@ -1478,14 +1445,15 @@ return a?JSON.stringify({panel:(a.state&&a.state.panel)||'',techId:(a.state&&a.s
             ))
             splashView = box
 
+            /* v2.11.7 (درخواست ۵) — یک ثانیه بیشتر (۲۵۰۰ms) + محو ۴۰۰ms */
             Handler(Looper.getMainLooper()).postDelayed({
                 try {
-                    box.animate().alpha(0f).setDuration(300).withEndAction {
+                    box.animate().alpha(0f).setDuration(400).withEndAction {
                         try { (box.parent as? android.widget.FrameLayout)?.removeView(box) } catch (_: Exception) {}
                         splashView = null
                     }.start()
                 } catch (_: Exception) { splashView = null }
-            }, 1500L)
+            }, 2500L)
         } catch (_: Exception) { /* بی‌اثر */ }
     }
 
@@ -1727,7 +1695,6 @@ return a?JSON.stringify({panel:(a.state&&a.state.panel)||'',techId:(a.state&&a.s
     override fun onDestroy() {
         versionCheckHandler.removeCallbacks(versionCheckTask)
         stopBackgroundNotifyPolling()
-        try { unregisterReceiver(apkDownloadReceiver) } catch (_: Exception) {}
         super.onDestroy()
     }
 

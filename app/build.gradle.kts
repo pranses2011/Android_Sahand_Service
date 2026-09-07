@@ -14,8 +14,8 @@ android {
         applicationId = "com.sahandservice.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 17
-        versionName = "2.11.6"
+        versionCode = 18
+        versionName = "2.11.7"
     }
 
     /* v2.11.0 — دو نسخهٔ اپ: نمایندگی و سرویس‌کار (مطابق v2.10.0 قبلی) */
