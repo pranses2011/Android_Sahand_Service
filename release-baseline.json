@@ -3,5 +3,5 @@
   "lastVersionCode": 17,
   "lastVersionDate": "2026-09-07",
   "releaseUrl": "https://github.com/pranses2011/Android_Sahand_Service/releases/tag/v2.11.6",
-  "note": "آخرین نسخهٔ رسمی نصب‌شده. قانون: نسخه/versionCode بزرگ‌تر + کامیت push + کلید امضای رسمی. ابزار: php tools/check-release.php — v2.11.6: سورس کامل منتشر شد؛ APK امضاشده نیازمند کلید رسمی (keystore/SahandService-release.keystore خارج از گیت)."
+  "note": "آخرین نسخهٔ رسمی نصب‌شده. قانون: نسخه/versionCode بزرگ‌تر + کامیت push + کلید امضای رسمی. ابزار: php tools/check-release.php — v2.11.6: سورس + APKهای امضاشدهٔ agency/tech با کلید رسمی (SHA-1=AB:9A:B0:…EE:3B، مطابق v2.11.5 → آپدیت بدون Uninstall) در رلیز v2.11.6 منتشر شدند؛ کلید از بستهٔ امنیتی کاربر (Sahand_Security_Package.zip) هرگز در گیت نیست."
 }
