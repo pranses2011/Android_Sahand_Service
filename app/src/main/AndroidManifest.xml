@@ -13,6 +13,10 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- v2.11.8 (درخواست ۱۵) — بدون این مجوز، intent معافیت از بهینه‌سازی
+         باتری SecurityException می‌دهد و معافیت هرگز اعمال نمی‌شد؛ نتیجه:
+         قاتل سرویس اعلان پس‌زمینه روی گوشی‌های تهاجمی (شیائومی/هواوی/...). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- v2.11.7 (درخواست ۱۶ — Play Protect) — REQUEST_INSTALL_PACKAGES حذف شد:
          این مجوز یکی از اصلی‌ترین عوامل هشدار «برنامهٔ ناامن/Play Protect» هنگام
          نصب اپ‌های کنارِ Play است. بروزرسانی اکنون با DownloadManager به پوشهٔ

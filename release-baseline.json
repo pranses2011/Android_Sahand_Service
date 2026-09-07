@@ -1,7 +1,7 @@
 {
-  "lastOfficialRelease": "2.11.6",
-  "lastVersionCode": 17,
-  "lastVersionDate": "2026-09-07",
+  "lastOfficialRelease": "2.11.8",
+  "lastVersionCode": 19,
+  "lastVersionDate": "2026-09-08",
   "releaseUrl": "https://github.com/pranses2011/Android_Sahand_Service/releases/tag/v2.11.6",
-  "note": "آخرین نسخهٔ رسمی. قانون: نسخه/versionCode بزرگ‌تر + کامیت push + کلید امضای رسمی. ابزار: php tools/check-release.php — v2.11.7: حذف REQUEST_INSTALL_PACKAGES (Play Protect — درخواست ۱۶) + فیکس 404 پس از گیت دسترسی‌ها (۴) + اسپلش بزرگ‌تر/طولانی‌تر (۵) + بازامضای V1+V2+V3."
+  "note": "v2.11.8: اسپلش جدید (سامانه خدمات پس از فروش/سهند سرویس/پنل/نسخه — درخواست ۹) + فیکس ذخیرهٔ خروجی‌ها (درخواست ۱۶) + اعلان‌ها: onTimeout اندروید ۱۴+ + مجوز معافیت باتری (درخواست ۱۵) + رفع بازگشت بی‌نهایت ESC پنل (۱۲/۱۴)."
 }

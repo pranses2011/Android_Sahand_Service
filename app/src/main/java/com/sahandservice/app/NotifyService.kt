@@ -95,6 +95,32 @@ class NotifyService : Service() {
         super.onDestroy()
     }
 
+    /* ═══ v2.11.8 (درخواست ۱۵) — اندروید ۱۴/۱۵: سهمیهٔ ۶ ساعتهٔ
+     * foreground-service از نوع dataSync. وقتی سیستم سهمیه تمام شد
+     * onTimeout صدا می‌زند؛ بدون این override سرویس می‌مرد و اعلان‌ها
+     * تا ابد قطع می‌شدند («نوتیفیکیشن کار نمی‌کند» روی گوشی‌های جدید).
+     * حالا: توقف تمیز + زنگ ساعت ۱۲ دقیقه بعد → سرویس دوباره بالا
+     * می‌آید (چرخهٔ سهمیه در همان روز تجدید می‌شود). ═══ */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        /* زنگ غیر-dقیق (بدون نیاز به مجوز SCHEDULE_EXACT_ALARM) + شروع مستقیم
+         * سرویس — آلارم اجازهٔ موقتِ بالا آمدن پس‌زمینه می‌دهد. */
+        try {
+            val am = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            val pi = android.app.PendingIntent.getService(
+                this, 1001,
+                Intent(this, NotifyService::class.java),
+                android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            am.setAndAllowWhileIdle(
+                android.app.AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + 12 * 60_000L,
+                pi
+            )
+        } catch (_: Exception) { /* fail-soft */ }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     /** نوتیف دائمی کم‌اهمیت (الزام foreground service) */
@@ -162,6 +188,11 @@ class NotifyService : Service() {
     private fun pollOnce() {
         val base = serverUrl()
         if (base.isBlank()) return
+
+        /* v2.11.8 (درخواست ۱۵) — سلامت نشست: اگر هیچ‌کدام از اندپوینت‌ها
+         * پاسخ ندادند در حالی که اینترنت هست، به‌احتمال زیاد نشست منقضی
+         * شده (قدیمی) — لاگ می‌گذاریم تا در عیب‌یابی دیده شود. با نشستِ
+         * لغزندهٔ سمت سرور (v2.12.12) این حالت دیگر رخ نمی‌دهد. */
 
         /* نقش کاربر از SharedPreferences (MainActivity آن را ذخیره می‌کند) */
         val panel = sp().getString("user_panel", null)

@@ -425,6 +425,11 @@ class MainActivity : AppCompatActivity() {
         web.evaluateJavascript("""(function(){
   if (window.__sahandDlHooked) return; window.__sahandDlHooked = true;
   function __sahandSaveBlob(blob, name){
+    /* v2.11.8 (درخواست ۱۶) — پل بومی در دسترس نیست؟ هرگز بی‌صدا نمی‌مانیم */
+    if (typeof SahandFiles === 'undefined') {
+      try { alert('ذخیره در این نسخهٔ برنامه در دسترس نیست — برنامه را به‌روزرسانی کنید'); } catch (eA) {}
+      return;
+    }
     try {
       var fr = new FileReader();
       fr.onloadend = function(){
@@ -1405,13 +1410,14 @@ return a?JSON.stringify({panel:(a.state&&a.state.panel)||'',techId:(a.state&&a.s
             box.setBackgroundColor(Color.parseColor("#0f172a"))
             box.setPadding(dpx(24), dpx(24), dpx(24), dpx(28))
 
-            /* v2.11.7 (درخواست ۵) — آیکون و متن «تمام‌عرض» و درشت‌تر:
-             * لوگو ۱۶۴dp (تقریباً تمام عرض موبایل)، عنوان ۳۲sp، نقش ۲۰sp،
-             * نام نمایندگی ۱۶sp و شمارهٔ نسخه ۱۴sp (کوچکتر از بقیه). */
+            /* v2.11.8 (درخواست ۹) — آیکون و متن‌ها بزرگ‌تر:
+             * لوگو ۲۱۰dp + متن‌های چهارگانهٔ درشت:
+             *   «سامانه خدمات پس از فروش» → «سهند سرویس» →
+             *   «پنل سرویسکاری / پنل مدیریت» → «نسخه : x.y.z» */
             val logo = android.widget.ImageView(this)
             logo.setImageResource(R.drawable.splash_logo)
             logo.adjustViewBounds = true
-            val lpLogo = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpx(164))
+            val lpLogo = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpx(210))
             lpLogo.gravity = android.view.Gravity.CENTER
             logo.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             box.addView(logo, lpLogo)
@@ -1432,12 +1438,15 @@ return a?JSON.stringify({panel:(a.state&&a.state.panel)||'',techId:(a.state&&a.s
                 return t
             }
 
-            tv("سامانه", 32f, Color.WHITE, true, 18, fullWidth = true)
-            tv(if (isTech) "سرویسکاری" else "مدیریت", 20f, Color.parseColor("#93c5fd"), true, 4, fullWidth = true)
+            /* v2.11.8 (درخواست ۹) — متن‌های خواسته‌شده به ترتیب:
+             * سامانه خدمات پس از فروش / سهند سرویس / پنل ... / نسخه : ... */
+            tv("سامانه خدمات پس از فروش", 30f, Color.WHITE, true, 16, fullWidth = true)
+            tv("سهند سرویس", 24f, Color.parseColor("#93c5fd"), true, 6, fullWidth = true)
+            tv(if (isTech) "پنل سرویسکاری" else "پنل مدیریت", 19f, Color.parseColor("#cbd5e1"), true, 14, fullWidth = true)
             val sp = getSharedPreferences(PREFS, 0)
             val agencyName = sp.getString("agency_title", "") ?: ""
-            if (agencyName.isNotBlank()) tv(agencyName, 16f, Color.parseColor("#cbd5e1"), false, 8, fullWidth = true)
-            tv("نسخهٔ " + BuildConfig.VERSION_NAME.replace(".", "٫"), 14f, Color.parseColor("#64748b"), false, 22, fullWidth = true)
+            if (agencyName.isNotBlank()) tv(agencyName, 15f, Color.parseColor("#94a3b8"), false, 8, fullWidth = true)
+            tv("نسخه : " + BuildConfig.VERSION_NAME.replace(".", "٫"), 16f, Color.parseColor("#64748b"), false, 20, fullWidth = true)
 
             root.addView(box, android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
