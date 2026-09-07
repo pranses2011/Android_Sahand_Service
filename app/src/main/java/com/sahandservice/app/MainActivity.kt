@@ -135,6 +135,7 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_main)
         setTheme(R.style.Theme_Sahand)
+        showSplash() /* v2.11.6 (درخواست ۶) — اسپلش با نام سامانه/نقش/نمایندگی/نسخه */
 
         web = findViewById(R.id.webview)
         progressBar = findViewById(R.id.progress)
@@ -272,16 +273,20 @@ class MainActivity : AppCompatActivity() {
                     if (!coldStartNavDone) {
                         coldStartNavDone = true
                         try {
+                            /* v2.11.6 (درخواست ۴) — داشبوردِ همان پنل: سرویس‌کار →
+                             * tech-dashboard؛ قبلاً همیشه 'dashboard' بود و روتر
+                             * سرویس‌کار «صفحه یافت نشد: dashboard» می‌داد */
                             web.evaluateJavascript(
                                 "(function(){try{var a=JSON.parse(localStorage.getItem('asm-auth')||'null');" +
                                 "if(a&&a.state&&a.state.userId&&window.__sahandSetPageRaw){" +
-                                "window.__sahandSetPageRaw('dashboard',{});}}catch(e){}})()", null)
+                                "window.__sahandSetPageRaw(a.state.panel==='technician'?'tech-dashboard':'dashboard',{});}}catch(e){}})()", null)
                         } catch (_: Exception) {}
                     }
                     // v2.11.0 — poll اعلان‌ها با هر بارگذاری صفحه تازه می‌شود
                     startBackgroundNotifyPolling()
                     // v2.11.1 — ثبت دستگاه در سرور لایسنس (مدیریت لایسنس ← دستگاه‌ها)
                     sendAppHeartbeatIfNeeded()
+                    cacheAgencyTitle() /* v2.11.6 — نام نمایندگی برای اسپلش بعدی */
         PushClient.ensureSetup(this@MainActivity) /* v2.11.4 — راه‌اندازی پوش FCM */
                     // v2.11.3 — ناوبری دیپ‌لینک نوتیف پس از آماده شدن صفحه
                     if (gateView == null) applyPendingNotifUrl()
@@ -774,11 +779,8 @@ class MainActivity : AppCompatActivity() {
             }
             refreshStatuses()
 
-            val btnEnable = Button(this)
-            btnEnable.text = "فعال‌سازی همه دسترسی‌ها"
-            btnEnable.setTextColor(0xffffffff.toInt())
-            btnEnable.background?.setTint(0xFF2563EB.toInt())
-            btnEnable.setPadding(0, dpx(12), 0, dpx(12))
+            /* v2.11.6 (درخواست ۵) — دکمهٔ مدرن راست‌چین به‌جای دکمهٔ سیستمی */
+            val btnEnable = sahModernButton("فعال‌سازی همه دسترسی‌ها", "primary")
             val blp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             blp.topMargin = dpx(18)
             card.addView(btnEnable, blp)
@@ -799,10 +801,7 @@ class MainActivity : AppCompatActivity() {
                 try { gatePermLauncher.launch(need.toTypedArray()) } catch (_: Exception) {}
             }
 
-            val btnSettings = Button(this)
-            btnSettings.text = "فعال‌سازی از تنظیمات برنامه"
-            btnSettings.setTextColor(0xff93c5fd.toInt())
-            btnSettings.setPadding(0, dpx(10), 0, dpx(10))
+            val btnSettings = sahModernButton("فعال‌سازی از تنظیمات برنامه", "secondary")
             card.addView(btnSettings, blp)
             btnSettings.setOnClickListener {
                 try {
@@ -812,10 +811,7 @@ class MainActivity : AppCompatActivity() {
 
             /* v2.11.5 — تست اعلان (item 5): کاربر همین‌جا می‌تواند مطمئن شود
              * مجوز و کانال اعلان واقعاً کار می‌کنند — بدون انتظار برای رویداد واقعی */
-            val btnTestNotif = Button(this)
-            btnTestNotif.text = "تست اعلان (بررسی نمایش پیام‌ها)"
-            btnTestNotif.setTextColor(0xff93c5fd.toInt())
-            btnTestNotif.setPadding(0, dpx(10), 0, dpx(10))
+            val btnTestNotif = sahModernButton("تست اعلان (بررسی نمایش پیام‌ها)", "secondary")
             card.addView(btnTestNotif, blp)
             btnTestNotif.setOnClickListener {
                 val shown = try {
@@ -833,10 +829,7 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
 
-            val btnSkip = Button(this)
-            btnSkip.text = "ادامه بدون فعال‌سازی"
-            btnSkip.setTextColor(0xff94a3b8.toInt())
-            btnSkip.setPadding(0, dpx(8), 0, dpx(8))
+            val btnSkip = sahModernButton("ادامه بدون فعال‌سازی", "ghost")
             card.addView(btnSkip, blp)
             btnSkip.setOnClickListener { dismissGate() }
 
@@ -1435,7 +1428,181 @@ return a?JSON.stringify({panel:(a.state&&a.state.panel)||'',techId:(a.state&&a.s
         }
     }
 
+    /* ═════════ v2.11.6 (درخواست ۶) — اسپلش شیک با متن‌ها ═════════
+     * لوگو + «سامانه» + نقش (مدیریت نمایندگی / سرویسکاری) + نام نمایندگی
+     * (کش از سرور) + شمارهٔ نسخهٔ برنامه — حداقل ۱.۵ ثانیه + محو ۳۰۰ms.
+     * قبلاً فقط bitmap وسط صفحه بود که چشمک می‌زد. */
+    private var splashView: View? = null
+    private fun showSplash() {
+        try {
+            val root = findViewById<android.widget.FrameLayout>(R.id.root) ?: return
+            val dp = resources.displayMetrics.density
+            fun dpx(v: Int) = (v * dp).roundToInt()
+            val isTech = try { BuildConfig.FLAVOR } catch (_: Exception) { "agency" } == "tech"
+
+            val box = LinearLayout(this)
+            box.orientation = LinearLayout.VERTICAL
+            box.gravity = android.view.Gravity.CENTER
+            box.setBackgroundColor(Color.parseColor("#0f172a"))
+            box.setPadding(dpx(24), dpx(24), dpx(24), dpx(24))
+
+            val logo = android.widget.ImageView(this)
+            logo.setImageResource(R.drawable.splash_logo)
+            logo.adjustViewBounds = true
+            val lpLogo = LinearLayout.LayoutParams(dpx(104), dpx(104))
+            box.addView(logo, lpLogo)
+
+            fun tv(text: String, sizeSp: Float, color: Int, bold: Boolean, topMarginDp: Int): TextView {
+                val t = TextView(this)
+                t.text = text
+                t.textSize = sizeSp
+                t.setTextColor(color)
+                t.gravity = android.view.Gravity.CENTER
+                t.typeface = if (bold) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+                val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                lp.topMargin = dpx(topMarginDp)
+                box.addView(t, lp)
+                return t
+            }
+
+            tv("سامانه", 24f, Color.WHITE, true, 14)
+            tv(if (isTech) "سرویسکاری" else "مدیریت", 16.5f, Color.parseColor("#93c5fd"), true, 2)
+            val sp = getSharedPreferences(PREFS, 0)
+            val agencyName = sp.getString("agency_title", "") ?: ""
+            if (agencyName.isNotBlank()) tv(agencyName, 14f, Color.parseColor("#cbd5e1"), false, 6)
+            tv("نسخهٔ " + BuildConfig.VERSION_NAME.replace(".", "٫"), 12f, Color.parseColor("#64748b"), false, 18)
+
+            root.addView(box, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+            splashView = box
+
+            Handler(Looper.getMainLooper()).postDelayed({
+                try {
+                    box.animate().alpha(0f).setDuration(300).withEndAction {
+                        try { (box.parent as? android.widget.FrameLayout)?.removeView(box) } catch (_: Exception) {}
+                        splashView = null
+                    }.start()
+                } catch (_: Exception) { splashView = null }
+            }, 1500L)
+        } catch (_: Exception) { /* بی‌اثر */ }
+    }
+
+    /** v2.11.6 — نام نمایندگی از پنل (برای اسپلش بعدی) کش می‌شود */
+    private fun cacheAgencyTitle() {
+        if (serverUrl.isBlank()) return
+        Thread {
+            try {
+                val url = serverUrl.trimEnd('/') + "/api/agency-brand"
+                val conn = URL(url).openConnection() as HttpURLConnection
+                conn.connectTimeout = 6000
+                conn.readTimeout = 6000
+                conn.requestMethod = "GET"
+                val cookie = CookieManager.getInstance().getCookie(serverUrl)
+                if (!cookie.isNullOrBlank()) conn.setRequestProperty("Cookie", cookie)
+                if (conn.responseCode != 200) return@Thread
+                val txt = conn.inputStream.bufferedReader().readText()
+                val obj = JSONObject(txt)
+                val p = obj.optJSONObject("profile")
+                if (p != null) {
+                    val title = p.optString("titleMain", "").ifBlank { p.optString("name", "") }
+                    if (title.isNotBlank()) {
+                        getSharedPreferences(PREFS, 0).edit().putString("agency_title", title).apply()
+                    }
+                }
+            } catch (_: Exception) { /* بی‌اثر */ }
+        }.start()
+    }
+
+    /* ═════════ v2.11.6 (درخواست ۵) — دکمهٔ مدرن راست‌چین ═════════ */
+    private fun sahModernButton(label: String, kind: String): Button {
+        val b = Button(this)
+        b.text = label
+        b.isAllCaps = false
+        b.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        b.textSize = 15f
+        b.textAlignment = View.TEXT_ALIGNMENT_CENTER
+        b.gravity = android.view.Gravity.CENTER
+        val dp = resources.displayMetrics.density
+        fun dpx(v: Int) = (v * dp).roundToInt()
+        val shape = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = dpx(14).toFloat()
+            when (kind) {
+                "primary" -> { setColor(0xFF2563EB.toInt()); setStroke(dpx(1), 0xFF1D4ED8.toInt()) }
+                "success" -> { setColor(0xFF059669.toInt()); setStroke(dpx(1), 0xFF047857.toInt()) }
+                "danger" -> { setColor(0xFFDC2626.toInt()); setStroke(dpx(1), 0xFFB91C1C.toInt()) }
+                "secondary" -> { setColor(0x00000000); setStroke(dpx(2), 0xFF60A5FA.toInt()) }
+                "ghost" -> { setColor(0x00000000); setStroke(dpx(1), 0xFF334155.toInt()) }
+            }
+        }
+        val content = android.graphics.drawable.ColorDrawable(0x33FFFFFF)
+        val ripple = android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(0x40FFFFFF), shape, content)
+        b.background = ripple
+        when (kind) {
+            "primary", "success", "danger" -> b.setTextColor(Color.WHITE)
+            "secondary" -> b.setTextColor(0xFF93C5FD.toInt())
+            "ghost" -> b.setTextColor(0xFF94A3B8.toInt())
+        }
+        b.setPadding(dpx(18), dpx(12), dpx(18), dpx(12))
+        return b
+    }
+
     private fun showExitDialog() {
+        /* v2.11.6 (درخواست ۵) — دیالوگ خروج سفارشی مدرنِ راست‌چین
+         * (به‌جای AlertDialog سیستمی که دکمه‌هایش چپ‌چین/بدون استایل بود) */
+        try {
+            val dlg = android.app.Dialog(this)
+            dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+            val dp = resources.displayMetrics.density
+            fun dpx(v: Int) = (v * dp).roundToInt()
+            val wrap = LinearLayout(this)
+            wrap.orientation = LinearLayout.VERTICAL
+            wrap.setBackgroundColor(Color.parseColor("#1e293b"))
+            wrap.setPadding(dpx(22), dpx(22), dpx(22), dpx(18))
+
+            val title = TextView(this)
+            title.text = getString(R.string.app_exit_title)
+            title.textSize = 17f
+            title.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            title.setTextColor(Color.WHITE)
+            title.gravity = android.view.Gravity.START
+            wrap.addView(title)
+            val msg = TextView(this)
+            msg.text = getString(R.string.app_exit_msg)
+            msg.textSize = 13.5f
+            msg.setTextColor(0xFF94A3B8.toInt())
+            msg.gravity = android.view.Gravity.START
+            val lpMsg = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lpMsg.topMargin = dpx(8)
+            wrap.addView(msg, lpMsg)
+
+            val btnExit = sahModernButton(getString(R.string.exit), "danger")
+            val lp1 = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp1.topMargin = dpx(16)
+            btnExit.setOnClickListener { dlg.dismiss(); finish() }
+            wrap.addView(btnExit, lp1)
+
+            val btnServer = sahModernButton(getString(R.string.settings_server), "secondary")
+            val lp2 = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp2.topMargin = dpx(8)
+            btnServer.setOnClickListener { dlg.dismiss(); startActivity(Intent(this, SetupActivity::class.java)) }
+            wrap.addView(btnServer, lp2)
+
+            val btnCancel = sahModernButton(getString(R.string.cancel), "ghost")
+            val lp3 = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp3.topMargin = dpx(6)
+            btnCancel.setOnClickListener { dlg.dismiss() }
+            wrap.addView(btnCancel, lp3)
+
+            dlg.setContentView(wrap)
+            dlg.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0xEE0B1220.toInt()))
+            dlg.setCancelable(true)
+            dlg.show()
+            dlg.window?.setLayout((resources.displayMetrics.widthPixels * 0.88).toInt(), android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+            return
+        } catch (_: Exception) { /* fallback پایین */ }
         AlertDialog.Builder(this, R.style.Theme_Sahand_Dialog)
             .setTitle(R.string.app_exit_title)
             .setMessage(R.string.app_exit_msg)
