@@ -14,8 +14,8 @@ android {
         applicationId = "com.sahandservice.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 20
-        versionName = "2.12.0"
+        versionCode = 21
+        versionName = "2.12.1"
     }
 
     /* v2.11.0 — دو نسخهٔ اپ: نمایندگی و سرویس‌کار (مطابق v2.10.0 قبلی) */
@@ -78,6 +78,10 @@ dependencies {
      * بدون پلاگین google-services و بدون google-services.json؛
      * پیکربندی از پنل (LM) گرفته می‌شود. */
     implementation("com.google.firebase:firebase-messaging:24.1.0")
+    /* v2.12.1 — اعلان پوش OneSignal (درخواست کاربر): مقداردهی در زمان
+     * اجرا با App ID از سرور لایسنس (تنظیمات LM ← اعلان پوش OneSignal).
+     * مدیریت توکن‌ها/نمایش اعلان خودکار است؛ polling قبلی پشتیبان می‌ماند. */
+    implementation("com.onesignal:OneSignal:5.1.31")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.2")

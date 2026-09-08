@@ -129,10 +129,13 @@ object PushClient {
     /** GET /api/push?action=fcm-config — با کوکی نشست (مثل NotifyService) */
     private fun fetchConfig(serverUrl: String): JSONObject? {
         return try {
-            val conn = openConn(serverUrl.trimEnd('/') + "/api/push?action=fcm-config", "GET")
+            val url = serverUrl.trimEnd('/') + "/api/push?action=fcm-config"
+            val conn = openConn(url, "GET")
             try {
                 val code = conn.responseCode
                 if (code !in 200..299) return null
+                /* v2.12.1 — نشست لغزیده: Set-Cookie پاسخ ذخیره شود (همان فیکس NotifyService) */
+                OneSignalClient.syncCookies(conn, url)
                 val txt = conn.inputStream.use { ins ->
                     BufferedReader(InputStreamReader(ins, Charsets.UTF_8)).use { it.readText() }
                 }

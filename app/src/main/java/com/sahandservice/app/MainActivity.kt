@@ -75,6 +75,8 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val PREFS = "sahand_prefs"
         const val KEY_URL = "server_url"
+        /* v2.12.1 — پوشهٔ اختصاصی همهٔ خروجی‌ها: Download/Sahand_Service_Exports */
+        const val EXPORT_FOLDER = "Sahand_Service_Exports"
         const val NOTIF_CHANNEL = "sahand_notifications"
         const val APK_MIME = "application/vnd.android.package-archive"
     }
@@ -278,6 +280,8 @@ class MainActivity : AppCompatActivity() {
                     sendAppHeartbeatIfNeeded()
                     cacheAgencyTitle() /* v2.11.6 — نام نمایندگی برای اسپلش بعدی */
         PushClient.ensureSetup(this@MainActivity) /* v2.11.4 — راه‌اندازی پوش FCM */
+                    OneSignalClient.ensureSetup(this@MainActivity) /* v2.12.1 — پوش OneSignal */
+                    setupOneSignalClickHandler() /* v2.12.1 — کلیک اعلان OneSignal → دیپ‌لینک پنل */
                     // v2.11.3 — ناوبری دیپ‌لینک نوتیف پس از آماده شدن صفحه
                     if (gateView == null) applyPendingNotifUrl()
                 }
@@ -591,7 +595,8 @@ class MainActivity : AppCompatActivity() {
         return if (clean.isEmpty() || clean == "." || clean == "..") "sahand-export.bin" else clean.take(80)
     }
 
-    /** ذخیرهٔ مستقیم بایت‌ها — MediaStore (اندروید ۱۰+) یا پوشهٔ Downloads */
+    /** ذخیرهٔ مستقیم بایت‌ها — MediaStore (اندروید ۱۰+) یا پوشهٔ Downloads
+     * v2.12.1 (درخواست ۶) — همهٔ خروجی‌ها در Download/Sahand_Service_Exports */
     fun saveDirectFile(name: String, mime: String, bytes: ByteArray) {
         try {
             val nm = sanitize(name)
@@ -615,13 +620,16 @@ class MainActivity : AppCompatActivity() {
                 put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
                 put(android.provider.MediaStore.Downloads.MIME_TYPE, mime)
                 put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+                /* v2.12.1 — پوشهٔ اختصاصی خروجی‌ها: Download/Sahand_Service_Exports */
+                put(android.provider.MediaStore.Downloads.RELATIVE_PATH,
+                    android.os.Environment.DIRECTORY_DOWNLOADS + "/" + EXPORT_FOLDER)
             }
             val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw Exception("insert failed")
             contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: throw Exception("stream failed")
             values.clear()
             values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
             contentResolver.update(uri, values, null, null)
-            Toast.makeText(this, getString(R.string.saved_to_downloads, name), Toast.LENGTH_LONG).show()
+            Toast.makeText(this, getString(R.string.saved_to_downloads, "Sahand_Service_Exports/$name"), Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             saveToAppDownloads(name, bytes)
         }
@@ -629,10 +637,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveToAppDownloads(name: String, bytes: ByteArray) {
         try {
-            val dir = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "exports").apply { if (!exists()) mkdirs() }
+            /* v2.12.1 — اندروید ۹ و قدیمی‌تر: پوشهٔ عمومی Download/Sahand_Service_Exports
+             * (با مجوز WRITE؛ اگر نشد پوشهٔ اختصاصی اپ). */
+            val publicDir = File(
+                android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
+                EXPORT_FOLDER
+            )
+            var dir: File
+            try {
+                if (!publicDir.exists()) publicDir.mkdirs()
+                if (publicDir.canWrite()) dir = publicDir
+                else throw Exception("public not writable")
+            } catch (_: Exception) {
+                dir = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), EXPORT_FOLDER).apply { if (!exists()) mkdirs() }
+            }
             val f = File(dir, name)
             f.writeBytes(bytes)
-            Toast.makeText(this, getString(R.string.saved_to_downloads, "$name (اپ)"), Toast.LENGTH_LONG).show()
+            Toast.makeText(this, getString(R.string.saved_to_downloads, "Sahand_Service_Exports/$name"), Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show()
         }
@@ -650,7 +671,7 @@ class MainActivity : AppCompatActivity() {
                         req.setTitle(guess)
                         req.setDescription(getString(R.string.download_started))
                         req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                        req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, sanitize(guess))
+                        req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Sahand_Service_Exports/" + sanitize(guess))
                         CookieManager.getInstance().getCookie(url)?.let { req.addRequestHeader("cookie", it) }
                         req.addRequestHeader("User-Agent", web.settings.userAgentString)
                         val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
@@ -905,6 +926,18 @@ class MainActivity : AppCompatActivity() {
         readNotifNavIntent(intent)
         /* اپ از قبل باز است → بلافاصله ناوبری کن (بدون گیت) */
         if (gateView == null) applyPendingNotifUrl()
+    }
+
+    /* ═══ v2.12.1 — کلیک روی اعلان OneSignal → همان دیپ‌لینک نوتیف ═══
+     * OneSignal خودش اعلان را نمایش می‌دهد؛ اینجا فقط کلیک را به سازوکار
+     * موجود (pendingNotifUrl) وصل می‌کنیم — رفتار یکسان با FCM/polling.
+     * پل جاوا (OneSignalClickHelper) برای API 5.1 — متد استاتیک
+     * getNotifications از Kotlin 2.0 با syntax property قابل‌فراخوانی نیست. */
+    private fun setupOneSignalClickHandler() {
+        OneSignalClickHelper.install { url ->
+            pendingNotifUrl = url
+            runOnUiThread { if (gateView == null) applyPendingNotifUrl() }
+        }
     }
 
     // ═════════════════════ بروزرسانی خودکار ═════════════════════
@@ -1195,7 +1228,7 @@ class MainActivity : AppCompatActivity() {
             req.setDescription(getString(R.string.update_dl_desc))
             req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             req.setMimeType(APK_MIME)
-            req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "SahandService-update-v$version.apk")
+            req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Sahand_Service_Exports/SahandService-update-v$version.apk")
             CookieManager.getInstance().getCookie(fullUrl)?.let { req.addRequestHeader("cookie", it) }
             req.addRequestHeader("User-Agent", web.settings.userAgentString)
             val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager

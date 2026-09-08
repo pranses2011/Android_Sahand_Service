@@ -31,6 +31,13 @@ import java.net.URL
  *  • BootReceiver بعد از ری‌استارت گوشی آن را فعال می‌کند؛
  *  • شمارنده‌ها در NotificationHub مشترک‌اند → با poll خودِ Activity
  *    هیچ اعلان تکراری صادر نمی‌شود.
+ *
+ * v2.12.1 — دو اصلاح اساسی «اعلان‌ها فعال است ولی نشان نمی‌دهد»:
+ *  ۱) کوکی نشستِ تازه (Set-Cookie) از پاسخ‌های poll در CookieManager
+ *     ذخیره می‌شود (قبلاً نادیده گرفته می‌شد و نشست پس از ~۷ روز منقضی
+ *     می‌شد → pollها بی‌صدا ۴۰۱ → اعلان‌ها برای همیشه خاموش)؛
+ *  ۲) OneSignal (اگر مدیر در سرور لایسنس فعال کرده باشد) کنار FCM
+ *     راه‌اندازی می‌شود — تحویل پوش از طریق بستر OneSignal.
  */
 class NotifyService : Service() {
 
@@ -63,10 +70,14 @@ class NotifyService : Service() {
         override fun run() {
             try { pollOnce() } catch (_: Exception) {}
             /* v2.11.4 — راه‌اندازی/تازه‌سازی پوش FCM هر ~۱۰ دقیقه (fail-soft) —
-             * حتی وقتی Activity بسته است؛ سرویس همیشه زنده است. */
+             * حتی وقتی Activity بسته است؛ سرویس همیشه زنده است.
+             * v2.12.1 — OneSignal هم همین‌جا (هر ~۱۰ دقیقه؛ fail-soft). */
             try {
                 pollCount++
-                if (pollCount % 10 == 1) PushClient.ensureSetup(this@NotifyService)
+                if (pollCount % 10 == 1) {
+                    PushClient.ensureSetup(this@NotifyService)
+                    OneSignalClient.ensureSetup(this@NotifyService)
+                }
             } catch (_: Exception) { /* بی‌اثر */ }
             handler.postDelayed(this, POLL_INTERVAL_MS)
         }
@@ -171,6 +182,28 @@ class NotifyService : Service() {
             try {
                 val code = conn.responseCode
                 if (code in 200..299) {
+                    /* v2.12.1 — ریشهٔ خاموشی بی‌صداِ اعلانها: سرور در پاسخِ
+                     * pollها کوکی نشستِ تازه (Set-Cookie — نشست لغزیده)
+                     * می‌فرستد؛ HttpURLConnection آن را نادیده می‌گرفت و
+                     * کوکی ذخیره‌شده پس از ~۷ روز منقضی می‌شد → همهٔ pollها
+                     * ۴۰۱ → «نوتیفیکیشن فعال است ولی نشان نمی‌دهد». حالا
+                     * کوکی تازه در CookieManager مشترک WebView ذخیره می‌شود. */
+                    try {
+                        val setCookies: List<String> = conn.headerFields?.get("Set-Cookie") ?: emptyList()
+                        if (setCookies.isNotEmpty()) {
+                            val u = java.net.URL(serverUrl().trimEnd('/') + path)
+                            val base = buildString {
+                                append(u.protocol).append("://").append(u.host)
+                                if (u.port > 0 && u.port != 80 && u.port != 443) append(":").append(u.port)
+                            }
+                            for (c in setCookies) {
+                                val pair = c.substringBefore(';').trim()
+                                if (pair.isEmpty()) continue
+                                CookieManager.getInstance().setCookie(base, "$pair; Path=/")
+                            }
+                            CookieManager.getInstance().flush()
+                        }
+                    } catch (_: Exception) { /* fail-soft */ }
                     conn.inputStream.use { ins ->
                         BufferedReader(InputStreamReader(ins, Charsets.UTF_8)).use { it.readText() }
                     }

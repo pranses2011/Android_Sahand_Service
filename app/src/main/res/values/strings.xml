@@ -29,7 +29,7 @@
     <string name="notif_off_msg">برای اطلاع از سرویس‌های جدید و پیام‌های چت، اعلان‌های برنامه را روشن کنید.</string>
     <string name="notif_open_settings">روشن کردن اعلان‌ها</string>
     <string name="storage_denied">برای ذخیره فایل، اجازه دسترسی به حافظه لازم است</string>
-    <string name="saved_to_downloads">ذخیره شد: %1$s\n(پوشه Downloads)</string>
+    <string name="saved_to_downloads">ذخیره شد: %1$s\n(پوشه Downloads/Sahand_Service_Exports)</string>
     <string name="download_failed">خطا در دانلود</string>
     <string name="download_started">دانلود شروع شد — در پوشه Downloads ذخیره می‌شود</string>
     <string name="save_failed">ذخیره فایل ناموفق بود</string>
